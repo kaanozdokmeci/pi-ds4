@@ -27,8 +27,10 @@ Restart Pi or run `/reload`.
 4. Start chatting.
 
 Downloads run in the background, so you can keep working in Pi and start more
-downloads from `/ds4` while one runs. Each download reports a progress bar with
-transfer rate and ETA in its own status line, counted from the bytes on disk.
+downloads from `/ds4` while one runs. The status line sums them up, for example
+`ds4: downloading 2 models, 37% done`. While downloads run, `/ds4` also offers
+**Download progress**, a pop-up with a progress bar, transfer rate and ETA for
+each one. Progress is counted from the bytes on disk.
 Only one Pi process downloads a given model at a time. Quitting Pi or running
 `/reload` stops running downloads; selecting the model again resumes where it
 left off. Full output stays in `~/.pi/ds4/log`.

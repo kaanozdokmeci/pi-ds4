@@ -56,7 +56,7 @@ import {
 	type SsdStreamingMode,
 } from "./catalog.ts";
 import { tryAcquireLock, type OwnerProbe } from "./locks.ts";
-import { downloadProgressText, formatBytes } from "./progress.ts";
+import { type DownloadProgress, downloadRowText, downloadsSummaryText, formatBytes } from "./progress.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -277,6 +277,8 @@ type Lease = {
 };
 
 type StatusCallback = (message: string | undefined) => void;
+// Applies an update to one download's entry in activeDownloads.
+type DownloadReporter = (update: Partial<DownloadProgress>) => void;
 type RunLoggedOptions = {
 	onStatus?: StatusCallback;
 	progressPrefix?: string;
@@ -300,7 +302,12 @@ let startupPromise: Promise<void> | undefined;
 let startupModelKey: ModelKey | undefined;
 const activeSetupChildren = new Set<ChildProcess>();
 // Downloads started from /ds4 in this Pi process, keyed by download target.
-const activeDownloads = new Map<string, Promise<void>>();
+const activeDownloads = new Map<string, DownloadProgress>();
+// All downloads share one status slot, written through the UI of the /ds4
+// command that started the latest download.
+const DOWNLOAD_STATUS_KEY = "ds4-downloads";
+let downloadStatusUi: ExtensionCommandContext["ui"] | undefined;
+let downloadStatusText: string | undefined;
 let resolvedRuntimeDir: string | undefined;
 let runtimeCheckoutUpdated = false;
 let installedModelKeys = new Set<ModelKey>();
@@ -691,6 +698,24 @@ async function readLogTail(): Promise<string[]> {
 	}
 }
 
+// Pop-up frame lines shared by the log and download progress viewers.
+function frameBorder(theme: LogTheme, left: string, fill: string, right: string, width: number, title?: string): string {
+	const innerWidth = Math.max(0, width - 2);
+	let inner = theme.fg("border", fill.repeat(innerWidth));
+	if (title) {
+		const rawTitle = truncateText(` ${title} `, innerWidth);
+		const fillWidth = Math.max(0, innerWidth - rawTitle.length);
+		inner = theme.fg("accent", rawTitle) + theme.fg("border", fill.repeat(fillWidth));
+	}
+	return theme.fg("border", left) + inner + theme.fg("border", right);
+}
+
+function frameRow(theme: LogTheme, text: string, width: number, color?: (value: string) => string): string {
+	const innerWidth = Math.max(0, width - 4);
+	const content = truncateText(text.replace(/\t/g, "   "), innerWidth, "", true);
+	return theme.fg("border", "│") + " " + (color ? color(content) : content) + " " + theme.fg("border", "│");
+}
+
 class Ds4LogViewer implements Component {
 	private lines: string[] = [];
 	private scrollFromBottom = 0;
@@ -752,23 +777,6 @@ class Ds4LogViewer implements Component {
 		this.tui.requestRender();
 	}
 
-	private borderLine(left: string, fill: string, right: string, width: number, title?: string): string {
-		const innerWidth = Math.max(0, width - 2);
-		let inner = this.theme.fg("border", fill.repeat(innerWidth));
-		if (title) {
-			const rawTitle = truncateText(` ${title} `, innerWidth);
-			const fillWidth = Math.max(0, innerWidth - rawTitle.length);
-			inner = this.theme.fg("accent", rawTitle) + this.theme.fg("border", fill.repeat(fillWidth));
-		}
-		return this.theme.fg("border", left) + inner + this.theme.fg("border", right);
-	}
-
-	private row(text: string, width: number, color?: (value: string) => string): string {
-		const innerWidth = Math.max(0, width - 4);
-		const content = truncateText(text.replace(/\t/g, "   "), innerWidth, "", true);
-		return this.theme.fg("border", "│") + " " + (color ? color(content) : content) + " " + this.theme.fg("border", "│");
-	}
-
 	render(width: number): string[] {
 		const height = this.viewportHeight();
 		if (
@@ -790,10 +798,10 @@ class Ds4LogViewer implements Component {
 		const title = `ds4 log • ${state}`;
 		const help = `↑↓ scroll • Pg page • End live • q/Esc close • ${LOG_FILE}`;
 		const lines = [
-			this.borderLine("╭", "─", "╮", width, title),
-			...visible.map((line) => this.row(line, width)),
-			this.row(help, width, (value) => this.theme.fg("dim", value)),
-			this.borderLine("╰", "─", "╯", width),
+			frameBorder(this.theme, "╭", "─", "╮", width, title),
+			...visible.map((line) => frameRow(this.theme, line, width)),
+			frameRow(this.theme, help, width, (value) => this.theme.fg("dim", value)),
+			frameBorder(this.theme, "╰", "─", "╯", width),
 		];
 
 		this.cachedWidth = width;
@@ -807,6 +815,54 @@ class Ds4LogViewer implements Component {
 	invalidate(): void {
 		this.cachedWidth = 0;
 	}
+
+	dispose(): void {
+		if (this.timer) {
+			clearInterval(this.timer);
+			this.timer = undefined;
+		}
+	}
+}
+
+// Lists each running /ds4 download with its own progress. The entries in
+// activeDownloads change in place, so a periodic redraw shows current values.
+class DownloadProgressViewer implements Component {
+	private timer: ReturnType<typeof setInterval> | undefined;
+
+	constructor(
+		private tui: LogTui,
+		private theme: LogTheme,
+		private done: () => void,
+	) {
+		this.timer = setInterval(() => this.tui.requestRender(), PROGRESS_POLL_MS);
+		this.timer.unref?.();
+	}
+
+	handleInput(data: string): void {
+		if (isKey(data, "escape") || data === "q") this.done();
+	}
+
+	render(width: number): string[] {
+		const downloads = [...activeDownloads.values()];
+		const body: string[] = [];
+		for (const download of downloads) {
+			if (body.length > 0) body.push(frameRow(this.theme, "", width));
+			body.push(frameRow(this.theme, `${download.name} (${download.target})`, width, (value) => this.theme.fg("accent", value)));
+			body.push(frameRow(this.theme, `  ${downloadRowText(download)}`, width));
+		}
+		if (body.length === 0) body.push(frameRow(this.theme, "No ds4 downloads are running.", width));
+
+		const title = downloadsSummaryText(downloads) ?? "ds4: no downloads";
+		return [
+			frameBorder(this.theme, "╭", "─", "╮", width, title),
+			...body,
+			frameRow(this.theme, "", width),
+			frameRow(this.theme, "q/Esc close", width, (value) => this.theme.fg("dim", value)),
+			frameBorder(this.theme, "╰", "─", "╯", width),
+		];
+	}
+
+	invalidate(): void {}
 
 	dispose(): void {
 		if (this.timer) {
@@ -1165,8 +1221,7 @@ function startDownloadMonitor(
 	downloadDir: string,
 	fileNames: string[],
 	totalBytes: number | undefined,
-	prefix: string,
-	onStatus?: StatusCallback,
+	report: DownloadReporter,
 ): DownloadMonitor {
 	let samples: { at: number; bytes: number }[] = [];
 	let lastBytes = 0;
@@ -1174,12 +1229,13 @@ function startDownloadMonitor(
 	let lastLine: string | undefined;
 	let stopped = false;
 
+	report({ totalBytes, phase: undefined });
 	const emit = () => {
-		if (!onStatus || stopped) return;
+		if (stopped) return;
 		// While the script verifies checksums or joins parts nothing grows, so
 		// fall back to whatever the script last reported.
 		if (Date.now() - lastGrowth > PROGRESS_STALL_MS && lastLine) {
-			onStatus(`${prefix}: ${lastLine}`);
+			report({ phase: lastLine });
 			return;
 		}
 		if (lastBytes <= 0) return;
@@ -1187,7 +1243,7 @@ function startDownloadMonitor(
 		const oldest = samples[0];
 		const elapsed = oldest ? (Date.now() - oldest.at) / 1000 : 0;
 		const rate = oldest && elapsed >= 1 ? (lastBytes - oldest.bytes) / elapsed : 0;
-		onStatus(`${prefix}: ${downloadProgressText(lastBytes, totalBytes, rate)}`);
+		report({ bytes: lastBytes, bytesPerSecond: rate, phase: undefined });
 	};
 
 	const poll = async () => {
@@ -1493,21 +1549,19 @@ async function ensureBuilt(runtimeDir: string, onStatus?: StatusCallback): Promi
 	await access(join(runtimeDir, "ds4-server"), constants.X_OK);
 }
 
-async function ensureModel(runtimeDir: string, modelKey: ModelKey, onStatus?: StatusCallback): Promise<string> {
+async function ensureModel(runtimeDir: string, modelKey: ModelKey, report: DownloadReporter): Promise<string> {
 	const model = modelForKey(modelKey);
 	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8");
 	if (!downloadScriptMentionsTarget(script, model.target)) {
 		throw new Error(`The ds4 checkout does not provide the ${model.target} download target`);
 	}
 
-	onStatus?.(`ensuring ${model.target} model`);
 	const files = expectedModelFiles(script, model);
 	const monitor = startDownloadMonitor(
 		modelDownloadDir(runtimeDir),
 		progressFileNames(script, files),
 		expectedTotalBytes(script, files, model.downloadBytes),
-		`downloading ${model.target}`,
-		onStatus,
+		report,
 	);
 	try {
 		await runLogged("./download_model.sh", [model.target], runtimeDir, `download ${model.target} model`, {
@@ -1527,7 +1581,7 @@ async function ensureModel(runtimeDir: string, modelKey: ModelKey, onStatus?: St
 	return modelPath;
 }
 
-async function ensureAddon(runtimeDir: string, addon: Addon, onStatus?: StatusCallback): Promise<string> {
+async function ensureAddon(runtimeDir: string, addon: Addon, report: DownloadReporter): Promise<string> {
 	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8");
 	if (!downloadScriptMentionsTarget(script, addon.target)) {
 		throw new Error(`The ds4 checkout does not provide the ${addon.target} download target`);
@@ -1535,13 +1589,11 @@ async function ensureAddon(runtimeDir: string, addon: Addon, onStatus?: StatusCa
 	const fileName = shellVariable(script, addon.fileVariable);
 	if (!fileName) throw new Error(`The ds4 checkout does not name the ${addon.target} file`);
 
-	onStatus?.(`ensuring ${addon.target}`);
 	const monitor = startDownloadMonitor(
 		modelDownloadDir(runtimeDir),
 		progressFileNames(script, [fileName]),
 		expectedTotalBytes(script, [fileName], addon.downloadBytes),
-		`downloading ${addon.target}`,
-		onStatus,
+		report,
 	);
 	try {
 		await runLogged("./download_model.sh", [addon.target], runtimeDir, `download ${addon.target}`, {
@@ -2021,14 +2073,16 @@ async function stopServerManually(): Promise<boolean> {
 type DownloadJob = {
 	target: string;
 	name: string;
-	run(runtimeDir: string, onStatus: StatusCallback): Promise<string>;
+	kind: DownloadProgress["kind"];
+	run(runtimeDir: string, report: DownloadReporter): Promise<string>;
 };
 
 const LOCK_OWNER_PROBE: OwnerProbe = { isAlive: isPidAlive, processStart };
 
-async function runDownloadJob(job: DownloadJob, onStatus: StatusCallback): Promise<string> {
+async function runDownloadJob(job: DownloadJob, report: DownloadReporter): Promise<string> {
 	// The lifecycle lock only covers cloning or updating the ds4 checkout. Holding
 	// it for a whole download would block server starts and other downloads.
+	const onStatus: StatusCallback = (message) => report({ phase: message });
 	const runtimeDir = await withLock(() => resolveRuntimeDirLocked(onStatus), STARTUP_LOCK_TIMEOUT_MS, true);
 	if (runtimeDisposed || shuttingDown) throw new Error(`download ${job.target} cancelled`);
 
@@ -2043,28 +2097,46 @@ async function runDownloadJob(job: DownloadJob, onStatus: StatusCallback): Promi
 		throw new Error(`${job.target} is already being downloaded by Pi process ${lock.owner?.pid ?? "unknown"}`);
 	}
 	try {
-		return await job.run(runtimeDir, onStatus);
+		return await job.run(runtimeDir, report);
 	} finally {
 		await lock.release();
 	}
 }
 
+function renderDownloadStatus(): void {
+	if (runtimeDisposed || !downloadStatusUi) return;
+	const text = downloadsSummaryText([...activeDownloads.values()]);
+	if (text === downloadStatusText) return;
+	downloadStatusText = text;
+	downloadStatusUi.setStatus(DOWNLOAD_STATUS_KEY, text);
+}
+
 // Pi waits for a command handler before it reads the next input, so /ds4
-// starts downloads in the background and returns. Each download reports in
-// its own status slot.
+// starts downloads in the background and returns. The status line sums up
+// all downloads; /ds4 → Download progress shows each one.
 function startBackgroundDownload(pi: ExtensionAPI, ctx: ExtensionCommandContext, job: DownloadJob): void {
 	if (activeDownloads.has(job.target)) {
 		ctx.ui.notify(`${job.name} is already downloading`, "info");
 		return;
 	}
 
-	const statusKey = `ds4-download-${job.target}`;
-	const onStatus: StatusCallback = (message) => {
-		if (!runtimeDisposed) ctx.ui.setStatus(statusKey, message);
+	const progress: DownloadProgress = {
+		target: job.target,
+		name: job.name,
+		kind: job.kind,
+		bytes: 0,
+		bytesPerSecond: 0,
+		phase: "preparing",
 	};
-	onStatus(`preparing ${job.target} download`);
+	const report: DownloadReporter = (update) => {
+		Object.assign(progress, update);
+		renderDownloadStatus();
+	};
+	activeDownloads.set(job.target, progress);
+	downloadStatusUi = ctx.ui;
+	renderDownloadStatus();
 
-	const download = runDownloadJob(job, onStatus)
+	void runDownloadJob(job, report)
 		.then(async (path) => {
 			if (runtimeDisposed) return;
 			await refreshDs4Provider(pi);
@@ -2075,10 +2147,37 @@ function startBackgroundDownload(pi: ExtensionAPI, ctx: ExtensionCommandContext,
 		})
 		.finally(() => {
 			activeDownloads.delete(job.target);
-			onStatus(undefined);
+			renderDownloadStatus();
 		});
-	activeDownloads.set(job.target, download);
-	ctx.ui.notify(`Downloading ${job.name} in the background; progress is in the status line`, "info");
+	ctx.ui.notify(
+		`Downloading ${job.name} in the background; see the status line or /ds4 → Download progress`,
+		"info",
+	);
+}
+
+async function showDownloadProgress(ctx: ExtensionCommandContext): Promise<void> {
+	if (ctx.mode !== "tui") {
+		const downloads = [...activeDownloads.values()];
+		const lines = downloads.map((download) => `${download.target}: ${downloadRowText(download)}`);
+		ctx.ui.notify([downloadsSummaryText(downloads) ?? "No ds4 downloads are running.", ...lines].join("\n"), "info");
+		return;
+	}
+
+	let viewer: DownloadProgressViewer | undefined;
+	try {
+		await ctx.ui.custom<void>(
+			(tui, theme, _keybindings, done) => {
+				viewer = new DownloadProgressViewer(tui, theme, done);
+				return viewer;
+			},
+			{
+				overlay: true,
+				overlayOptions: { width: "80%", minWidth: 60, maxHeight: "85%", anchor: "center", margin: 1 },
+			},
+		);
+	} finally {
+		viewer?.dispose();
+	}
 }
 
 async function showDs4Log(ctx: ExtensionCommandContext): Promise<void> {
@@ -2118,11 +2217,19 @@ function registerDs4Command(pi: ExtensionAPI): void {
 
 			const running = await isServerRunning();
 			const serverAction = running ? "Stop server" : "Start server";
-			const action = await ctx.ui.select("ds4", ["See log", serverAction, "Download model"]);
+			const actions = ["See log", serverAction, "Download model"];
+			const progressAction = `Download progress (${activeDownloads.size} running)`;
+			if (activeDownloads.size > 0) actions.push(progressAction);
+			const action = await ctx.ui.select("ds4", actions);
 			if (!action) return;
 
 			if (action === "See log") {
 				await showDs4Log(ctx);
+				return;
+			}
+
+			if (action === progressAction) {
+				await showDownloadProgress(ctx);
 				return;
 			}
 
@@ -2178,16 +2285,18 @@ function registerDs4Command(pi: ExtensionAPI): void {
 				...DOWNLOADABLE_MODELS.map((model) => ({
 					target: model.target,
 					name: model.name,
+					kind: "model" as const,
 					label: `${model.menuLabel}${stateLabel(model.target, installedModelKeys.has(model.key))}`,
-					run: (runtimeDir: string, onStatus: StatusCallback) => ensureModel(runtimeDir, model.key, onStatus),
+					run: (runtimeDir: string, report: DownloadReporter) => ensureModel(runtimeDir, model.key, report),
 				})),
 				// Vision encoders and DSpark support files are optional add-ons for
 				// an already downloaded language model, so they are listed separately.
 				...ADDONS.filter((addon) => addonAvailableOnPlatform(addon, process.platform)).map((addon) => ({
 					target: addon.target,
 					name: addon.name,
+					kind: "addon" as const,
 					label: `${addon.menuLabel}${stateLabel(addon.target, installedAddonKeys.has(addon.key))}`,
-					run: (runtimeDir: string, onStatus: StatusCallback) => ensureAddon(runtimeDir, addon, onStatus),
+					run: (runtimeDir: string, report: DownloadReporter) => ensureAddon(runtimeDir, addon, report),
 				})),
 			];
 			const selected = await ctx.ui.select(
@@ -2336,6 +2445,8 @@ export default async function (pi: ExtensionAPI) {
 	startupModelKey = undefined;
 	activeSetupChildren.clear();
 	activeDownloads.clear();
+	downloadStatusUi = undefined;
+	downloadStatusText = undefined;
 	resolvedRuntimeDir = undefined;
 	runtimeCheckoutUpdated = false;
 	providerStatusCallback = undefined;

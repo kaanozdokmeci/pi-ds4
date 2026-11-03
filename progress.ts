@@ -1,4 +1,4 @@
-// Pure formatting for download progress in the Pi status line.
+// Pure formatting for download progress in the Pi status line and pop-up.
 
 export const PROGRESS_BAR_WIDTH = 16;
 
@@ -48,4 +48,45 @@ export function downloadProgressText(
 	}
 	const bar = total ? `${renderProgressBar(bytes / total)} ` : "";
 	return `${bar}${details.join(", ")}`;
+}
+
+// One download started from /ds4. The monitor updates bytes and rate while
+// the file grows; phase describes a step without byte progress, such as
+// preparing the checkout or the script verifying a finished file.
+export type DownloadProgress = {
+	target: string;
+	name: string;
+	kind: "model" | "addon";
+	bytes: number;
+	totalBytes?: number;
+	bytesPerSecond: number;
+	phase?: string;
+};
+
+function hasKnownTotal(download: DownloadProgress): download is DownloadProgress & { totalBytes: number } {
+	return !!download.totalBytes && download.bytes <= download.totalBytes;
+}
+
+// Summarizes every running download in one status line. The percentage is
+// left out unless every download has a trustworthy expected size, because a
+// partial sum would overstate how far along the set is.
+export function downloadsSummaryText(downloads: readonly DownloadProgress[]): string | undefined {
+	const count = downloads.length;
+	if (count === 0) return undefined;
+	const noun = downloads.every((download) => download.kind === "model") ? "model" : "download";
+	const summary = `ds4: downloading ${count} ${noun}${count === 1 ? "" : "s"}`;
+	if (!downloads.every(hasKnownTotal)) return summary;
+	let bytes = 0;
+	let totalBytes = 0;
+	for (const download of downloads) {
+		bytes += download.bytes;
+		totalBytes += download.totalBytes;
+	}
+	return `${summary}, ${Math.floor((bytes / totalBytes) * 100)}% done`;
+}
+
+export function downloadRowText(download: DownloadProgress): string {
+	if (download.phase) return download.phase;
+	if (download.bytes <= 0) return "starting";
+	return downloadProgressText(download.bytes, download.totalBytes, download.bytesPerSecond);
 }
