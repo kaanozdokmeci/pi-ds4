@@ -36,7 +36,7 @@ Common settings:
 
 `DS4_GGUF_DIR` is an environment-only upstream ds4 option for storing downloaded GGUF files outside the runtime checkout. It is not a `settings.json` key.
 
-Download progress is measured from the requested growing files in the download directory (including their matching hashed files under the Hugging Face downloader's `.cache/huggingface/download` directory, which print nothing when piped) and compared against the exact sizes in `download_model.sh`'s `artifact_identity()` where upstream declares them. If progress looks stuck, check `~/.pi/ds4/log` for the raw downloader output.
+Downloads started from `/ds4` run in the background, several at once, each with its own status line; a lock under `~/.pi/ds4/downloads/<target>` keeps a second Pi process from downloading the same target. Quitting Pi or `/reload` stops them, and selecting the model again resumes. Download progress is measured from the requested growing files in the download directory (including their matching hashed files under the Hugging Face downloader's `.cache/huggingface/download` directory, which print nothing when piped) and compared against the exact sizes in `download_model.sh`'s `artifact_identity()` where upstream declares them. If progress looks stuck, check `~/.pi/ds4/log` for the raw downloader output.
 
 After editing, run `/reload` or restart Pi. Models are never downloaded automatically. Use `/ds4` to download an explicit DeepSeek V4 Flash, DeepSeek V4.1 Flash, DeepSeek V4 Pro, GLM 5.2, GLM 5.3, or Qwen3.8 Flash Next variant or add-on and to view the log or control the server. Existing and completed downloads are discovered and registered automatically in Pi's model catalogue.
 

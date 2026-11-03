@@ -237,6 +237,16 @@ describe("upstream download_model.sh", { skip: upstreamScript ? false : `no scri
 		}
 	});
 
+	it("has an exact size for every single-file download", () => {
+		const declared = artifactSizes(upstreamScript!);
+		for (const item of [...DOWNLOADABLE_MODELS, ...ADDONS]) {
+			if ("shardCount" in item && item.shardCount) continue;
+			const files = "fileVariable" in item && item.fileVariable ? [shellVariable(upstreamScript!, item.fileVariable)!] : [];
+			const known = files.every((file) => declared.has(file));
+			assert.ok(known || (item.downloadBytes ?? 0) > 0, item.key);
+		}
+	});
+
 	it("provides every add-on target and file name", () => {
 		for (const addon of ADDONS) {
 			assert.equal(downloadScriptMentionsTarget(upstreamScript!, addon.target), true, addon.target);

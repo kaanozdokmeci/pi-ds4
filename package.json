@@ -26,6 +26,8 @@
   "files": [
     "index.ts",
     "catalog.ts",
+    "locks.ts",
+    "progress.ts",
     "ds4-watchdog.sh",
     "install-pi-extension-local.sh",
     "settings.example.json",

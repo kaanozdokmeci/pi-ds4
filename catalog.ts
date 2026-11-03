@@ -4,7 +4,6 @@
 // that decide ds4-server arguments can be tested with `node --test`.
 
 export const GIB = 1024 ** 3;
-export const GB = 1000 ** 3;
 
 // Weights are not the only resident allocation: context, runtime buffers and
 // the OS need room too. Models whose weights exceed this share of system RAM
@@ -68,8 +67,9 @@ export type DownloadableModel = {
 	// downloaded and ds4-server is started with --vision.
 	visionEncoder?: string;
 	speculative?: SpeculativeSupport;
-	// Approximate download size, used for the progress bar when upstream does
-	// not declare an exact size in download_model.sh's artifact_identity().
+	// Exact size of the main GGUF on Hugging Face (checked 2026-11-03), used for
+	// the progress bar when download_model.sh's artifact_identity() does not
+	// declare it.
 	downloadBytes?: number;
 };
 
@@ -107,7 +107,7 @@ export const ADDONS: Addon[] = [
 		name: "DeepSeek V4 Flash Vision Experimental encoder",
 		menuLabel:
 			"DeepSeek V4 Flash Vision Experimental / vision encoder \u2014 about 0.9 GiB; included with the Vision Experimental models",
-		downloadBytes: 0.9 * GIB,
+		downloadBytes: 932_857_760,
 	},
 	{
 		key: "glm53-flash-vision",
@@ -115,8 +115,8 @@ export const ADDONS: Addon[] = [
 		target: "glm53-vision",
 		fileVariable: "GLM53_VISION_FILE",
 		name: "GLM 5.3 Flash vision encoder",
-		menuLabel: "GLM 5.3 Flash / vision encoder \u2014 about 1.1 GB; adds image input",
-		downloadBytes: 1.1 * GB,
+		menuLabel: "GLM 5.3 Flash / vision encoder \u2014 about 1.0 GiB; adds image input",
+		downloadBytes: 1_127_280_960,
 	},
 	{
 		key: "qwen38-flash-vision",
@@ -124,8 +124,8 @@ export const ADDONS: Addon[] = [
 		target: "qwen38-vision",
 		fileVariable: "QWEN38_VISION_FILE",
 		name: "Qwen3.8 Flash Next vision encoder",
-		menuLabel: "Qwen3.8 Flash Next / vision encoder \u2014 about 0.6 GB; adds image input",
-		downloadBytes: 0.6 * GB,
+		menuLabel: "Qwen3.8 Flash Next / vision encoder \u2014 about 0.6 GiB; adds image input",
+		downloadBytes: 616_703_104,
 	},
 	{
 		key: "dsv4-flash-dspark",
@@ -134,8 +134,8 @@ export const ADDONS: Addon[] = [
 		fileVariable: "DS4F_DSPARK_FILE",
 		name: "DeepSeek V4 Flash DSpark support",
 		menuLabel:
-			"DeepSeek V4 Flash / DSpark speculative decoding \u2014 about 6 GB; used with speculativeDecoding",
-		downloadBytes: 6 * GB,
+			"DeepSeek V4 Flash / DSpark speculative decoding \u2014 about 5.6 GiB; used with speculativeDecoding",
+		downloadBytes: 5_989_114_272,
 	},
 	{
 		key: "dsv4-flash-vision-dspark",
@@ -145,7 +145,7 @@ export const ADDONS: Addon[] = [
 		name: "DeepSeek V4 Flash Vision Experimental DSpark support",
 		menuLabel:
 			"DeepSeek V4 Flash Vision Experimental / DSpark speculative decoding \u2014 about 5.6 GiB; used with speculativeDecoding",
-		downloadBytes: 5.6 * GIB,
+		downloadBytes: 5_989_114_528,
 	},
 ];
 
@@ -160,9 +160,9 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "ds4f-q2",
 		fileVariable: "DS4F_Q2_FILE",
 		name: "DeepSeek V4 Flash · Q2 imatrix",
-		menuLabel: "DeepSeek V4 Flash / Q2 imatrix — about 81 GB; ≥96 GB RAM",
+		menuLabel: "DeepSeek V4 Flash / Q2 imatrix — about 81 GiB; ≥96 GB RAM",
 		speculative: FLASH_0731_DSPARK,
-		downloadBytes: 81 * GB,
+		downloadBytes: 86_720_111_488,
 	},
 	{
 		key: "dsv4-flash-q2q4",
@@ -170,9 +170,9 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "ds4f-q2-q4",
 		fileVariable: "DS4F_Q2_Q4_FILE",
 		name: "DeepSeek V4 Flash · Q2/Q4 imatrix",
-		menuLabel: "DeepSeek V4 Flash / Q2-Q4 imatrix — about 98 GB; ≥128 GB RAM",
+		menuLabel: "DeepSeek V4 Flash / Q2-Q4 imatrix — about 91 GiB; ≥128 GB RAM",
 		speculative: FLASH_0731_DSPARK,
-		downloadBytes: 98 * GB,
+		downloadBytes: 97_591_747_456,
 	},
 	{
 		key: "dsv4-flash-q4",
@@ -180,9 +180,9 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "ds4f-q4",
 		fileVariable: "DS4F_Q4_FILE",
 		name: "DeepSeek V4 Flash · Q4 imatrix",
-		menuLabel: "DeepSeek V4 Flash / Q4 imatrix — about 153 GB; ≥256 GB RAM",
+		menuLabel: "DeepSeek V4 Flash / Q4 imatrix — about 153 GiB; ≥256 GB RAM",
 		speculative: FLASH_0731_DSPARK,
-		downloadBytes: 153 * GB,
+		downloadBytes: 164_633_502_592,
 	},
 	{
 		key: "dsv4-flash-vision-q2",
@@ -193,7 +193,7 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		menuLabel: "DeepSeek V4 Flash Vision Experimental / Q2 — about 81 GiB plus encoder; ≥96 GB RAM",
 		visionEncoder: "dsv4-flash-vision",
 		speculative: FLASH_VISION_DSPARK,
-		downloadBytes: 81 * GIB,
+		downloadBytes: 86_720_111_776,
 	},
 	{
 		key: "dsv4-flash-vision-q2q4",
@@ -204,7 +204,7 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		menuLabel: "DeepSeek V4 Flash Vision Experimental / Q2-Q4 — about 91 GiB plus encoder; ≥128 GB RAM",
 		visionEncoder: "dsv4-flash-vision",
 		speculative: FLASH_VISION_DSPARK,
-		downloadBytes: 91 * GIB,
+		downloadBytes: 97_591_747_744,
 	},
 	{
 		key: "dsv41-flash-q2",
@@ -234,8 +234,8 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "pro-q2-imatrix",
 		fileVariable: "PRO_Q2_IMATRIX_FILE",
 		name: "DeepSeek V4 Pro · Q2 imatrix",
-		menuLabel: "DeepSeek V4 Pro / Q2 imatrix — about 430 GB; ≥512 GB RAM",
-		downloadBytes: 430 * GB,
+		menuLabel: "DeepSeek V4 Pro / Q2 imatrix — about 433 GiB; ≥512 GB RAM",
+		downloadBytes: 464_627_334_560,
 	},
 	{
 		key: "glm53-flash-q2",
@@ -251,7 +251,7 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		streamingContextLimit: 65_536,
 		visionEncoder: "glm53-flash-vision",
 		speculative: EMBEDDED_MTP,
-		downloadBytes: 90 * GIB,
+		downloadBytes: 96_505_816_384,
 	},
 	{
 		key: "glm53-flash-q4",
@@ -264,7 +264,7 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		streamingContextLimit: 65_536,
 		visionEncoder: "glm53-flash-vision",
 		speculative: EMBEDDED_MTP,
-		downloadBytes: 178 * GIB,
+		downloadBytes: 190_875_526_464,
 	},
 	{
 		key: "glm53-full-q2",
@@ -275,7 +275,7 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		menuLabel: "GLM 5.3 / IQ2 XXS — about 197 GiB; ≥256 GB RAM or SSD streaming",
 		residentBytes: 197 * GIB,
 		streamingContextLimit: 65_536,
-		downloadBytes: 197 * GIB,
+		downloadBytes: 211_075_860_864,
 	},
 	{
 		key: "glm52-q4-xl",
@@ -294,8 +294,8 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "glm-antirez-iq2xxs",
 		fileVariable: "GLM_ANTIREZ_IQ2XXS_FILE",
 		name: "GLM 5.2 · IQ2 XXS",
-		menuLabel: "GLM 5.2 / IQ2 XXS — about 188 GiB; ≥256 GB RAM",
-		downloadBytes: 188 * GIB,
+		menuLabel: "GLM 5.2 / IQ2 XXS — about 197 GiB; ≥256 GB RAM",
+		downloadBytes: 211_075_856_448,
 		contextLimit: 202_752,
 		maxTokens: 164_000,
 	},
@@ -305,8 +305,8 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "glm-antirez-q2",
 		fileVariable: "GLM_ANTIREZ_Q2_FILE",
 		name: "GLM 5.2 · Q2",
-		menuLabel: "GLM 5.2 / Q2 — about 262 GB; ≥384 GB RAM",
-		downloadBytes: 262 * GB,
+		menuLabel: "GLM 5.2 / Q2 — about 244 GiB; ≥384 GB RAM",
+		downloadBytes: 262_036_650_048,
 		contextLimit: 202_752,
 		maxTokens: 164_000,
 	},
@@ -316,8 +316,8 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		target: "glm-antirez-q4",
 		fileVariable: "GLM_ANTIREZ_Q4_FILE",
 		name: "GLM 5.2 · Q4",
-		menuLabel: "GLM 5.2 / Q4 — about 434 GB; ≥512 GB RAM",
-		downloadBytes: 434 * GB,
+		menuLabel: "GLM 5.2 / Q4 — about 404 GiB; ≥512 GB RAM",
+		downloadBytes: 434_170_886_208,
 		contextLimit: 202_752,
 		maxTokens: 164_000,
 	},

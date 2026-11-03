@@ -55,6 +55,8 @@ import {
 	type SpeculativeSupport,
 	type SsdStreamingMode,
 } from "./catalog.ts";
+import { tryAcquireLock, type OwnerProbe } from "./locks.ts";
+import { downloadProgressText, formatBytes } from "./progress.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -68,6 +70,7 @@ const KV_DIR = join(DS4_DIR, "kv");
 const SUPPORT_DIR = join(DS4_DIR, "support");
 const CLIENT_DIR = join(DS4_DIR, "clients");
 const LOCK_DIR = join(DS4_DIR, "lock");
+const DOWNLOAD_LOCK_DIR = join(DS4_DIR, "downloads");
 const PORT_LOCK_DIR = join(DS4_DIR, "port.lock");
 const STATE_FILE = join(DS4_DIR, "server.json");
 const PORT_FILE = join(DS4_DIR, "port.json");
@@ -213,7 +216,6 @@ const PROGRESS_MAX_CHARS = 160;
 const PROGRESS_POLL_MS = 1_000;
 const PROGRESS_STALL_MS = 5_000;
 const PROGRESS_RATE_WINDOW_MS = 30_000;
-const PROGRESS_BAR_WIDTH = 16;
 
 type LegacyModelQuant = "q2" | "q2-imatrix" | "q2-q4-imatrix" | "q4";
 
@@ -296,7 +298,9 @@ const WATCHDOG_SCRIPT = WATCHDOG_SCRIPT_CONFIG
 let heartbeat: ReturnType<typeof setInterval> | undefined;
 let startupPromise: Promise<void> | undefined;
 let startupModelKey: ModelKey | undefined;
-let activeSetupChild: ChildProcess | undefined;
+const activeSetupChildren = new Set<ChildProcess>();
+// Downloads started from /ds4 in this Pi process, keyed by download target.
+const activeDownloads = new Map<string, Promise<void>>();
 let resolvedRuntimeDir: string | undefined;
 let runtimeCheckoutUpdated = false;
 let installedModelKeys = new Set<ModelKey>();
@@ -655,18 +659,6 @@ async function removeFile(file: string): Promise<void> {
 async function appendLog(text: string): Promise<void> {
 	await mkdir(DS4_DIR, { recursive: true });
 	await appendFile(LOG_FILE, text, "utf8");
-}
-
-function formatBytes(bytes: number): string {
-	const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-	let value = bytes;
-	let unit = 0;
-	while (value >= 1024 && unit < units.length - 1) {
-		value /= 1024;
-		unit++;
-	}
-	const digits = unit === 0 || value >= 100 ? 0 : value >= 10 ? 1 : 2;
-	return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
 async function readLogTail(): Promise<string[]> {
@@ -1111,24 +1103,6 @@ async function ensureWatchdog(): Promise<void> {
 	}
 }
 
-function formatDuration(seconds: number): string {
-	if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
-	const total = Math.round(seconds);
-	const hours = Math.floor(total / 3600);
-	const minutes = Math.floor((total % 3600) / 60);
-	const secs = total % 60;
-	const pad = (value: number) => String(value).padStart(2, "0");
-	return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
-}
-
-function renderProgressBar(fraction: number): string {
-	const clamped = Math.max(0, Math.min(1, fraction));
-	// Floor so a full bar only shows at completion, matching the percentage.
-	const filled = Math.floor(clamped * PROGRESS_BAR_WIDTH);
-	const bar = `${"\u2588".repeat(filled)}${"\u2591".repeat(PROGRESS_BAR_WIDTH - filled)}`;
-	return `[${bar}] ${String(Math.floor(clamped * 100)).padStart(3)}%`;
-}
-
 function progressFileNames(script: string, fileNames: string[]): string[] {
 	const names = new Set(fileNames);
 	// Some targets download declared split artifacts before assembling the final
@@ -1213,13 +1187,7 @@ function startDownloadMonitor(
 		const oldest = samples[0];
 		const elapsed = oldest ? (Date.now() - oldest.at) / 1000 : 0;
 		const rate = oldest && elapsed >= 1 ? (lastBytes - oldest.bytes) / elapsed : 0;
-		const details = [totalBytes ? `${formatBytes(lastBytes)} / ${formatBytes(totalBytes)}` : formatBytes(lastBytes)];
-		if (rate > 0) details.push(`${formatBytes(rate)}/s`);
-		if (totalBytes && rate > 0 && lastBytes < totalBytes) {
-			details.push(`${formatDuration((totalBytes - lastBytes) / rate)} left`);
-		}
-		const bar = totalBytes ? `${renderProgressBar(lastBytes / totalBytes)} ` : "";
-		onStatus(`${prefix}: ${bar}${details.join(", ")}`);
+		onStatus(`${prefix}: ${downloadProgressText(lastBytes, totalBytes, rate)}`);
 	};
 
 	const poll = async () => {
@@ -1382,7 +1350,7 @@ async function runLogged(command: string, args: string[], cwd: string, label: st
 			return;
 		}
 
-		activeSetupChild = child;
+		activeSetupChildren.add(child);
 		const handleOutput = (chunk: Buffer) => {
 			writeLogChunk(chunk);
 			progress?.onChunk(chunk);
@@ -1391,7 +1359,7 @@ async function runLogged(command: string, args: string[], cwd: string, label: st
 		child.stderr?.on("data", handleOutput);
 
 		const finish = (error?: Error) => {
-			if (activeSetupChild === child) activeSetupChild = undefined;
+			activeSetupChildren.delete(child);
 			progress?.flush();
 			closeLog();
 			if (error) reject(error);
@@ -1411,12 +1379,15 @@ async function runLogged(command: string, args: string[], cwd: string, label: st
 	});
 }
 
-function killActiveSetupChild(): void {
-	const child = activeSetupChild;
-	if (!child?.pid) return;
-	try {
-		process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM");
-	} catch {}
+// Builds, clones and every running download are setup children. Downloads run
+// in parallel, so shutdown has to stop all of them.
+function killActiveSetupChildren(): void {
+	for (const child of activeSetupChildren) {
+		if (!child.pid) continue;
+		try {
+			process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM");
+		} catch {}
+	}
 }
 
 async function isDs4Checkout(dir: string): Promise<boolean> {
@@ -1549,10 +1520,11 @@ async function ensureModel(runtimeDir: string, modelKey: ModelKey, onStatus?: St
 	const installed = await discoverInstalledModelKeys(runtimeDir);
 	if (!installed.has(modelKey)) throw new Error(`${model.target} download completed without all expected model files`);
 
-	const modelPath = join(runtimeDir, "ds4flash.gguf");
-	const resolvedModelPath = await realpath(modelPath).catch(() => modelPath);
-	await access(resolvedModelPath, constants.R_OK);
-	return resolvedModelPath;
+	// Parallel downloads each relink ./ds4flash.gguf, so it may point at another
+	// model by now. Report the file this download produced instead.
+	const modelPath = await installedModelPath(runtimeDir, modelKey);
+	await access(modelPath, constants.R_OK);
+	return modelPath;
 }
 
 async function ensureAddon(runtimeDir: string, addon: Addon, onStatus?: StatusCallback): Promise<string> {
@@ -2046,18 +2018,67 @@ async function stopServerManually(): Promise<boolean> {
 	});
 }
 
-async function downloadModelManually(modelKey: ModelKey, onStatus?: StatusCallback): Promise<string> {
-	return withLock(async () => {
-		const runtimeDir = await resolveRuntimeDirLocked(onStatus);
-		return ensureModel(runtimeDir, modelKey, onStatus);
-	}, STARTUP_LOCK_TIMEOUT_MS, true);
+type DownloadJob = {
+	target: string;
+	name: string;
+	run(runtimeDir: string, onStatus: StatusCallback): Promise<string>;
+};
+
+const LOCK_OWNER_PROBE: OwnerProbe = { isAlive: isPidAlive, processStart };
+
+async function runDownloadJob(job: DownloadJob, onStatus: StatusCallback): Promise<string> {
+	// The lifecycle lock only covers cloning or updating the ds4 checkout. Holding
+	// it for a whole download would block server starts and other downloads.
+	const runtimeDir = await withLock(() => resolveRuntimeDirLocked(onStatus), STARTUP_LOCK_TIMEOUT_MS, true);
+	if (runtimeDisposed || shuttingDown) throw new Error(`download ${job.target} cancelled`);
+
+	// One downloader per target across every Pi process: download_model.sh
+	// cannot share partial files between two runs of the same target.
+	const lock = await tryAcquireLock(
+		join(DOWNLOAD_LOCK_DIR, job.target),
+		{ pid: process.pid, processStart: await getOwnProcessStart(), label: job.target, createdAt: Date.now() },
+		LOCK_OWNER_PROBE,
+	);
+	if (!lock.acquired) {
+		throw new Error(`${job.target} is already being downloaded by Pi process ${lock.owner?.pid ?? "unknown"}`);
+	}
+	try {
+		return await job.run(runtimeDir, onStatus);
+	} finally {
+		await lock.release();
+	}
 }
 
-async function downloadAddonManually(addon: Addon, onStatus?: StatusCallback): Promise<string> {
-	return withLock(async () => {
-		const runtimeDir = await resolveRuntimeDirLocked(onStatus);
-		return ensureAddon(runtimeDir, addon, onStatus);
-	}, STARTUP_LOCK_TIMEOUT_MS, true);
+// Pi waits for a command handler before it reads the next input, so /ds4
+// starts downloads in the background and returns. Each download reports in
+// its own status slot.
+function startBackgroundDownload(pi: ExtensionAPI, ctx: ExtensionCommandContext, job: DownloadJob): void {
+	if (activeDownloads.has(job.target)) {
+		ctx.ui.notify(`${job.name} is already downloading`, "info");
+		return;
+	}
+
+	const statusKey = `ds4-download-${job.target}`;
+	const onStatus: StatusCallback = (message) => {
+		if (!runtimeDisposed) ctx.ui.setStatus(statusKey, message);
+	};
+	onStatus(`preparing ${job.target} download`);
+
+	const download = runDownloadJob(job, onStatus)
+		.then(async (path) => {
+			if (runtimeDisposed) return;
+			await refreshDs4Provider(pi);
+			ctx.ui.notify(`Downloaded ${job.name}: ${path}`, "info");
+		})
+		.catch((error) => {
+			if (!runtimeDisposed) ctx.ui.notify(`Could not download ${job.target}: ${describeError(error)}`, "error");
+		})
+		.finally(() => {
+			activeDownloads.delete(job.target);
+			onStatus(undefined);
+		});
+	activeDownloads.set(job.target, download);
+	ctx.ui.notify(`Downloading ${job.name} in the background; progress is in the status line`, "info");
 }
 
 async function showDs4Log(ctx: ExtensionCommandContext): Promise<void> {
@@ -2151,17 +2172,22 @@ function registerDs4Command(pi: ExtensionAPI): void {
 				return;
 			}
 
-			type DownloadChoice = { label: string; model?: DownloadableModel; addon?: Addon };
-			const choices: DownloadChoice[] = [
+			const stateLabel = (target: string, installed: boolean) =>
+				activeDownloads.has(target) ? " • downloading" : installed ? " • installed" : "";
+			const choices: (DownloadJob & { label: string })[] = [
 				...DOWNLOADABLE_MODELS.map((model) => ({
-					model,
-					label: `${model.menuLabel}${installedModelKeys.has(model.key) ? " • installed" : ""}`,
+					target: model.target,
+					name: model.name,
+					label: `${model.menuLabel}${stateLabel(model.target, installedModelKeys.has(model.key))}`,
+					run: (runtimeDir: string, onStatus: StatusCallback) => ensureModel(runtimeDir, model.key, onStatus),
 				})),
 				// Vision encoders and DSpark support files are optional add-ons for
 				// an already downloaded language model, so they are listed separately.
 				...ADDONS.filter((addon) => addonAvailableOnPlatform(addon, process.platform)).map((addon) => ({
-					addon,
-					label: `${addon.menuLabel}${installedAddonKeys.has(addon.key) ? " • installed" : ""}`,
+					target: addon.target,
+					name: addon.name,
+					label: `${addon.menuLabel}${stateLabel(addon.target, installedAddonKeys.has(addon.key))}`,
+					run: (runtimeDir: string, onStatus: StatusCallback) => ensureAddon(runtimeDir, addon, onStatus),
 				})),
 			];
 			const selected = await ctx.ui.select(
@@ -2170,20 +2196,7 @@ function registerDs4Command(pi: ExtensionAPI): void {
 			);
 			const choice = choices.find((entry) => entry.label === selected);
 			if (!choice) return;
-
-			const target = choice.model?.target ?? choice.addon!.target;
-			ctx.ui.setStatus("ds4", `preparing ${target} download`);
-			try {
-				const path = choice.model
-					? await downloadModelManually(choice.model.key, (message) => ctx.ui.setStatus("ds4", message))
-					: await downloadAddonManually(choice.addon!, (message) => ctx.ui.setStatus("ds4", message));
-				await refreshDs4Provider(pi);
-				ctx.ui.notify(`Downloaded ${choice.model?.name ?? choice.addon!.name}: ${path}`, "info");
-			} catch (error) {
-				ctx.ui.notify(`Could not download ${target}: ${describeError(error)}`, "error");
-			} finally {
-				ctx.ui.setStatus("ds4", undefined);
-			}
+			startBackgroundDownload(pi, ctx, choice);
 		},
 	});
 }
@@ -2321,7 +2334,8 @@ export default async function (pi: ExtensionAPI) {
 	watchdogStarted = false;
 	startupPromise = undefined;
 	startupModelKey = undefined;
-	activeSetupChild = undefined;
+	activeSetupChildren.clear();
+	activeDownloads.clear();
 	resolvedRuntimeDir = undefined;
 	runtimeCheckoutUpdated = false;
 	providerStatusCallback = undefined;
@@ -2348,7 +2362,7 @@ export default async function (pi: ExtensionAPI) {
 		runtimeDisposed = true;
 		providerStatusCallback = undefined;
 		stopHeartbeat();
-		killActiveSetupChild();
+		killActiveSetupChildren();
 
 		try {
 			if (startupPromise) await Promise.race([startupPromise.catch(() => {}), sleep(5_000)]);
