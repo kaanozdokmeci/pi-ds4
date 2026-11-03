@@ -47,11 +47,13 @@ import {
 	shellVariable,
 	speculativeArgs,
 	speculativeModeFor,
+	serverStartLabel,
 	ssdStreamingFor,
 	thinkingLevelMapFor,
 	type Addon,
 	type DownloadableModel,
 	type ModelKey,
+	type ServerStartPlan,
 	type SpeculativeSupport,
 	type SsdStreamingMode,
 } from "./catalog.ts";
@@ -556,6 +558,17 @@ function powerArgsForModel(modelKey: ModelKey): string[] {
 
 function ssdStreamingForModel(modelKey: ModelKey): boolean {
 	return ssdStreamingFor(modelForKey(modelKey), SSD_STREAMING, totalmem());
+}
+
+function serverStartPlanForModel(modelKey: ModelKey): ServerStartPlan {
+	return {
+		streaming: ssdStreamingForModel(modelKey),
+		contextTokens: contextTokensForModel(modelKey),
+		vision: visionEnabledForModel(modelKey),
+		speculative: speculativeModeForModel(modelKey),
+		powerPercent: powerPercentForModel(modelKey),
+		totalMemoryBytes: totalmem(),
+	};
 }
 
 function ssdStreamingArgsForModel(modelKey: ModelKey): string[] {
@@ -2257,7 +2270,10 @@ function registerDs4Command(pi: ExtensionAPI): void {
 					ctx.model?.provider === PROVIDER_ID ? modelKeyForModelId(ctx.model.id) : undefined;
 				let modelKey = activeModelKey && installedModelKeys.has(activeModelKey) ? activeModelKey : undefined;
 				if (!modelKey) {
-					const choices = available.map((model) => ({ model, label: `${model.key} — ${model.name}` }));
+					const choices = available.map((model) => ({
+						model,
+						label: serverStartLabel(model, serverStartPlanForModel(model.key)),
+					}));
 					const selected = await ctx.ui.select(
 						"Start ds4-server with model",
 						choices.map((choice) => choice.label),

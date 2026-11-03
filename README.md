@@ -40,7 +40,12 @@ on future Pi starts and shown in `/model`. Selecting one starts `ds4-server` on
 demand; it stops automatically when no Pi processes are using it.
 
 Use `/ds4` at any time to download another model or add-on, view the log, or
-start and stop the server manually.
+start and stop the server manually. When the active model is not a ds4 model,
+**Start server** lists the downloaded models. Each entry shows the model's RAM
+requirement and how this machine would start it: resident or with SSD
+streaming, the context size, and whether vision, speculative decoding or
+reduced power apply. It also warns when a resident model needs more RAM than
+the machine has.
 
 Most large downloads use the Hugging Face CLI (`hf`). ds4's download script
 prints installation instructions when it is missing.

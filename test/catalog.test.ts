@@ -17,12 +17,15 @@ import {
 	expectedTotalBytes,
 	modelForKey,
 	powerPercentFor,
+	ramRequirementText,
+	serverStartLabel,
 	shellVariable,
 	speculativeArgs,
 	speculativeModeFor,
 	ssdStreamingFor,
 	thinkingLevelMapFor,
 	type ModelKey,
+	type ServerStartPlan,
 } from "../catalog.ts";
 
 const RAM_128_GIB = 128 * GIB;
@@ -252,5 +255,52 @@ describe("upstream download_model.sh", { skip: upstreamScript ? false : `no scri
 			assert.equal(downloadScriptMentionsTarget(upstreamScript!, addon.target), true, addon.target);
 			assert.ok(shellVariable(upstreamScript!, addon.fileVariable), addon.key);
 		}
+	});
+});
+
+describe("serverStartLabel", () => {
+	const plan = (overrides: Partial<ServerStartPlan> = {}): ServerStartPlan => ({
+		streaming: false,
+		contextTokens: 1024 ** 2,
+		vision: false,
+		powerPercent: 100,
+		totalMemoryBytes: RAM_128_GIB,
+		...overrides,
+	});
+
+	it("gives every model a unique name and a RAM requirement", () => {
+		assert.equal(new Set(DOWNLOADABLE_MODELS.map((model) => model.name)).size, DOWNLOADABLE_MODELS.length);
+		for (const model of DOWNLOADABLE_MODELS) {
+			assert.match(ramRequirementText(model), /^≥\d+ GB RAM( or SSD streaming)?$/, model.key);
+		}
+	});
+
+	it("shows the requirement and a resident start with its features", () => {
+		assert.equal(
+			serverStartLabel(
+				modelForKey("dsv4-flash-q2"),
+				plan({ vision: true, speculative: { kind: "dspark", addon: "dsv4-flash-dspark" }, powerPercent: 50 }),
+			),
+			"DeepSeek V4 Flash · Q2 imatrix — needs ≥96 GB RAM; starts resident, 1M context, vision, DSpark speculative decoding, 50% power",
+		);
+	});
+
+	it("shows an SSD streaming start for a model larger than RAM", () => {
+		assert.equal(
+			serverStartLabel(modelForKey("dsv41-flash-q2"), plan({ streaming: true, contextTokens: 131_072 })),
+			"DeepSeek V4.1 Flash · Q2 — needs ≥192 GB RAM or SSD streaming; starts with SSD streaming, 128K context",
+		);
+	});
+
+	it("marks models without SSD streaming and warns when RAM is short", () => {
+		assert.equal(
+			serverStartLabel(modelForKey("qwen38-flash-q2"), plan({ contextTokens: 262_144, speculative: { kind: "mtp" } })),
+			"Qwen3.8 Flash Next · Q2 — needs ≥64 GB RAM, no SSD streaming; starts resident, 256K context, MTP speculative decoding",
+		);
+		assert.equal(
+			serverStartLabel(modelForKey("glm52-q4"), plan({ contextTokens: 202_752 })),
+			"GLM 5.2 · Q4 — needs ≥512 GB RAM; starts resident, 198K context — needs more RAM than this machine's 128 GB",
+		);
+		assert.doesNotMatch(serverStartLabel(modelForKey("dsv4-flash-q2q4"), plan()), /more RAM/);
 	});
 });

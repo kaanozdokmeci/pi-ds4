@@ -417,6 +417,50 @@ export function speculativeArgs(mode: SpeculativeSupport | undefined, dsparkPath
 	return dsparkPath ? ["--dspark", "--mtp-model", dsparkPath] : [];
 }
 
+// The RAM requirement at the end of a model's download label, for example
+// "≥192 GB RAM or SSD streaming".
+export function ramRequirementText(model: DownloadableModel): string {
+	return model.menuLabel.slice(model.menuLabel.lastIndexOf("; ") + 2);
+}
+
+function requiredRamGb(model: DownloadableModel): number | undefined {
+	const match = ramRequirementText(model).match(/^≥(\d+) GB RAM/);
+	return match ? Number(match[1]) : undefined;
+}
+
+function formatContextTokens(tokens: number): string {
+	return tokens >= 1024 ** 2 ? `${Math.round(tokens / 1024 ** 2)}M` : `${Math.round(tokens / 1024)}K`;
+}
+
+// How ds4-server would start a model on this machine with the current settings.
+export type ServerStartPlan = {
+	streaming: boolean;
+	contextTokens: number;
+	vision: boolean;
+	speculative?: SpeculativeSupport;
+	powerPercent: number;
+	totalMemoryBytes: number;
+};
+
+// Label for the /ds4 → Start server picker: the model's memory requirement
+// followed by how this machine would run it.
+export function serverStartLabel(model: DownloadableModel, plan: ServerStartPlan): string {
+	const requirement = ramRequirementText(model) + (model.ssdStreamingSupported === false ? ", no SSD streaming" : "");
+	const details = [
+		plan.streaming ? "starts with SSD streaming" : "starts resident",
+		`${formatContextTokens(plan.contextTokens)} context`,
+	];
+	if (plan.vision) details.push("vision");
+	if (plan.speculative) details.push(`${plan.speculative.kind === "mtp" ? "MTP" : "DSpark"} speculative decoding`);
+	if (plan.powerPercent < 100) details.push(`${plan.powerPercent}% power`);
+
+	const machineGb = Math.round(plan.totalMemoryBytes / GIB);
+	const required = requiredRamGb(model);
+	const warning =
+		!plan.streaming && required && required > machineGb ? ` — needs more RAM than this machine's ${machineGb} GB` : "";
+	return `${model.name} — needs ${requirement}; ${details.join(", ")}${warning}`;
+}
+
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ThinkingLevelMap = Record<ThinkingLevel, string | null>;
 
