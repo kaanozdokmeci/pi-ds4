@@ -45,7 +45,8 @@ start and stop the server manually. When the active model is not a ds4 model,
 requirement and how this machine would start it: resident or with SSD
 streaming, the context size, and whether vision, speculative decoding or
 reduced power apply. It also warns when a resident model needs more RAM than
-the machine has.
+the machine has. The same text is each ds4 model's name in Pi's catalogue, so
+`/model` shows it as **Model Name** for the highlighted ds4 model.
 
 Most large downloads use the Hugging Face CLI (`hf`). ds4's download script
 prints installation instructions when it is missing.

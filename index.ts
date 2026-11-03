@@ -2349,7 +2349,9 @@ function ds4Model(model: DownloadableModel): Model<ProviderProtocol> {
 	const contextWindow = contextTokensForModel(model.key);
 	return {
 		id: model.key,
-		name: model.name,
+		// /model lists only ids and shows this name for the highlighted entry, so
+		// it carries the same memory and start details as /ds4 → Start server.
+		name: serverStartLabel(model, serverStartPlanForModel(model.key)),
 		api: PROVIDER_API,
 		provider: PROVIDER_ID,
 		baseUrl: providerBaseUrl(),
