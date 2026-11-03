@@ -31,6 +31,30 @@ import {
 import { homedir, totalmem } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	ADDONS,
+	DOWNLOADABLE_MODELS,
+	addonAvailableOnPlatform,
+	addonForKey,
+	artifactSizes,
+	contextTokensFor,
+	downloadScriptMentionsTarget,
+	expectedModelFiles,
+	expectedTotalBytes,
+	modelForKey,
+	modelKeyForModelId,
+	powerPercentFor,
+	shellVariable,
+	speculativeArgs,
+	speculativeModeFor,
+	ssdStreamingFor,
+	thinkingLevelMapFor,
+	type Addon,
+	type DownloadableModel,
+	type ModelKey,
+	type SpeculativeSupport,
+	type SsdStreamingMode,
+} from "./catalog.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -134,8 +158,6 @@ function selectedProtocol(): ProviderProtocol {
 	}
 }
 
-type SsdStreamingMode = "auto" | "on" | "off";
-
 function selectedSsdStreaming(): SsdStreamingMode {
 	const raw = configString("DS4_SSD_STREAMING", "auto")!.toLowerCase();
 	switch (raw) {
@@ -171,14 +193,8 @@ if (!Number.isInteger(SERVER_POWER) || SERVER_POWER < 1 || SERVER_POWER > 100) {
 	throw new Error(`DS4_POWER must be an integer between 1 and 100 in the environment or ${SETTINGS_FILE}`);
 }
 const SSD_STREAMING = selectedSsdStreaming();
+const SPECULATIVE_DECODING = configBoolean("DS4_SPECULATIVE_DECODING", false);
 const SERVER_BASE_ARGS = ["--kv-disk-space-mb", "8192"];
-
-const GIB = 1024 ** 3;
-const GB = 1000 ** 3;
-// Weights are not the only resident allocation: context, runtime buffers and
-// the OS need room too. Models whose weights exceed this share of system RAM
-// are started with SSD streaming instead of full residency.
-const RESIDENT_RAM_FRACTION = 0.9;
 
 const HEARTBEAT_MS = 10_000;
 const LEASE_TTL_MS = 45_000;
@@ -199,165 +215,7 @@ const PROGRESS_STALL_MS = 5_000;
 const PROGRESS_RATE_WINDOW_MS = 30_000;
 const PROGRESS_BAR_WIDTH = 16;
 
-type ModelKey =
-	| "dsv4-flash-q2"
-	| "dsv4-flash-q2q4"
-	| "dsv4-flash-q4"
-	| "dsv41-flash-q2"
-	| "dsv41-flash-q4"
-	| "dsv4-pro-q2"
-	| "glm52-q4-xl"
-	| "glm52-iq2xxs"
-	| "glm52-q2"
-	| "glm52-q4";
-
 type LegacyModelQuant = "q2" | "q2-imatrix" | "q2-q4-imatrix" | "q4";
-
-type DownloadableModel = {
-	key: ModelKey;
-	target: string;
-	fileVariable?: string;
-	shardedBaseVariable?: string;
-	shardCount?: number;
-	name: string;
-	menuLabel: string;
-	contextLimit?: number;
-	maxTokens?: number;
-	// Weights that have to stay in memory for a resident run. This is not the
-	// download size: DeepSeek V4.1 keeps its Engram tables on disk and reads
-	// rows as needed, so its GGUF is far larger than its resident footprint.
-	residentBytes?: number;
-	// Context ceiling applied when the model runs with SSD streaming, unless
-	// contextTokens is configured explicitly. Streaming machines are memory
-	// constrained and a huge context shrinks the routed-expert cache.
-	streamingContextLimit?: number;
-	// Key into VISION_ENCODERS. Images work once the matching encoder GGUF is
-	// downloaded and ds4-server is started with --vision.
-	visionEncoder?: string;
-	// Approximate download size, used for the progress bar when upstream does
-	// not declare an exact size in download_model.sh's artifact_identity().
-	downloadBytes?: number;
-};
-
-type VisionEncoder = {
-	key: string;
-	target: string;
-	fileVariable: string;
-	name: string;
-	menuLabel: string;
-	// Upstream refuses to load the encoder on other backends.
-	metalOnly?: boolean;
-	downloadBytes?: number;
-};
-
-const VISION_ENCODERS: VisionEncoder[] = [
-	{
-		key: "dsv41-flash",
-		target: "ds41f-vision",
-		fileVariable: "DS41_VISION_FILE",
-		name: "DeepSeek V4.1 Flash vision encoder",
-		menuLabel: "DeepSeek V4.1 Flash / vision encoder \u2014 about 0.9 GiB; adds image input on Metal",
-		metalOnly: true,
-	},
-];
-
-const DOWNLOADABLE_MODELS: DownloadableModel[] = [
-	{
-		key: "dsv4-flash-q2",
-		target: "ds4f-q2",
-		fileVariable: "DS4F_Q2_FILE",
-		name: "DeepSeek V4 Flash · Q2 imatrix",
-		menuLabel: "DeepSeek V4 Flash / Q2 imatrix — about 81 GB; ≥96 GB RAM",
-		downloadBytes: 81 * GB,
-	},
-	{
-		key: "dsv4-flash-q2q4",
-		target: "ds4f-q2-q4",
-		fileVariable: "DS4F_Q2_Q4_FILE",
-		name: "DeepSeek V4 Flash · Q2/Q4 imatrix",
-		menuLabel: "DeepSeek V4 Flash / Q2-Q4 imatrix — about 98 GB; ≥128 GB RAM",
-		downloadBytes: 98 * GB,
-	},
-	{
-		key: "dsv4-flash-q4",
-		target: "ds4f-q4",
-		fileVariable: "DS4F_Q4_FILE",
-		name: "DeepSeek V4 Flash · Q4 imatrix",
-		menuLabel: "DeepSeek V4 Flash / Q4 imatrix — about 153 GB; ≥256 GB RAM",
-		downloadBytes: 153 * GB,
-	},
-	{
-		key: "dsv41-flash-q2",
-		target: "ds41f-q2",
-		fileVariable: "DS41_Q2_FILE",
-		name: "DeepSeek V4.1 Flash · Q2",
-		menuLabel: "DeepSeek V4.1 Flash / Q2 — 341 GiB on disk, 152 GiB resident; ≥192 GB RAM or SSD streaming",
-		residentBytes: 152 * GIB,
-		streamingContextLimit: 131_072,
-		visionEncoder: "dsv41-flash",
-	},
-	{
-		key: "dsv41-flash-q4",
-		target: "ds41f-q4",
-		fileVariable: "DS41_Q4_FILE",
-		name: "DeepSeek V4.1 Flash · Q4",
-		menuLabel: "DeepSeek V4.1 Flash / Q4 — 483 GiB on disk, 294 GiB resident; ≥512 GB RAM or SSD streaming",
-		residentBytes: 294 * GIB,
-		streamingContextLimit: 131_072,
-		visionEncoder: "dsv41-flash",
-	},
-	{
-		key: "dsv4-pro-q2",
-		target: "pro-q2-imatrix",
-		fileVariable: "PRO_Q2_IMATRIX_FILE",
-		name: "DeepSeek V4 Pro · Q2 imatrix",
-		menuLabel: "DeepSeek V4 Pro / Q2 imatrix — about 430 GB; ≥512 GB RAM",
-		downloadBytes: 430 * GB,
-	},
-	{
-		key: "glm52-q4-xl",
-		target: "glm-unsloth-q4",
-		shardedBaseVariable: "GLM_UNSLOTH_Q4_LOCAL_BASE",
-		shardCount: 11,
-		name: "GLM 5.2 · Unsloth Q4 XL",
-		menuLabel: "GLM 5.2 / Unsloth Q4 XL — 11 shards; ≥512 GB RAM",
-		contextLimit: 202_752,
-		maxTokens: 164_000,
-	},
-	{
-		key: "glm52-iq2xxs",
-		target: "glm-antirez-iq2xxs",
-		fileVariable: "GLM_ANTIREZ_IQ2XXS_FILE",
-		name: "GLM 5.2 · IQ2 XXS",
-		menuLabel: "GLM 5.2 / IQ2 XXS — about 188 GiB; ≥256 GB RAM",
-		downloadBytes: 188 * GIB,
-		contextLimit: 202_752,
-		maxTokens: 164_000,
-	},
-	{
-		key: "glm52-q2",
-		target: "glm-antirez-q2",
-		fileVariable: "GLM_ANTIREZ_Q2_FILE",
-		name: "GLM 5.2 · Q2",
-		menuLabel: "GLM 5.2 / Q2 — about 262 GB; ≥384 GB RAM",
-		downloadBytes: 262 * GB,
-		contextLimit: 202_752,
-		maxTokens: 164_000,
-	},
-	{
-		key: "glm52-q4",
-		target: "glm-antirez-q4",
-		fileVariable: "GLM_ANTIREZ_Q4_FILE",
-		name: "GLM 5.2 · Q4",
-		menuLabel: "GLM 5.2 / Q4 — about 434 GB; ≥512 GB RAM",
-		downloadBytes: 434 * GB,
-		contextLimit: 202_752,
-		maxTokens: 164_000,
-	},
-];
-
-const MODELS_BY_KEY = new Map(DOWNLOADABLE_MODELS.map((model) => [model.key, model]));
-const VISION_ENCODERS_BY_KEY = new Map(VISION_ENCODERS.map((encoder) => [encoder.key, encoder]));
 
 type ServerEndpoint = {
 	host: string;
@@ -442,7 +300,7 @@ let activeSetupChild: ChildProcess | undefined;
 let resolvedRuntimeDir: string | undefined;
 let runtimeCheckoutUpdated = false;
 let installedModelKeys = new Set<ModelKey>();
-let installedVisionKeys = new Set<string>();
+let installedAddonKeys = new Set<string>();
 let currentEndpoint: ServerEndpoint | undefined;
 let leaseStartedAt = Date.now();
 let ownProcessStart: string | undefined;
@@ -567,16 +425,6 @@ function truncateText(value: string, width: number, ellipsis = "", pad = false):
 	return pad ? text + " ".repeat(Math.max(0, width - text.length)) : text;
 }
 
-function modelForKey(modelKey: ModelKey): DownloadableModel {
-	const model = MODELS_BY_KEY.get(modelKey);
-	if (!model) throw new Error(`Unknown ds4 model: ${modelKey}`);
-	return model;
-}
-
-function modelKeyForModelId(modelId: string | undefined): ModelKey | undefined {
-	return modelId && MODELS_BY_KEY.has(modelId as ModelKey) ? (modelId as ModelKey) : undefined;
-}
-
 function kvDirForModel(modelKey: ModelKey): string {
 	if (modelKey === "dsv4-flash-q2") return join(DS4_DIR, "kv-q2-imatrix");
 	if (modelKey === "dsv4-flash-q2q4") return join(DS4_DIR, "kv-q2-q4-imatrix");
@@ -585,48 +433,15 @@ function kvDirForModel(modelKey: ModelKey): string {
 }
 
 function contextTokensForModel(modelKey: ModelKey): number {
-	const model = modelForKey(modelKey);
-	let limit = model.contextLimit ?? SERVER_CONTEXT_TOKENS;
-	// An explicit contextTokens setting always wins; otherwise streaming models
-	// get a smaller default so the routed-expert cache keeps enough memory.
-	if (!CONTEXT_TOKENS_EXPLICIT && model.streamingContextLimit && ssdStreamingForModel(modelKey)) {
-		limit = Math.min(limit, model.streamingContextLimit);
-	}
-	return Math.min(SERVER_CONTEXT_TOKENS, limit);
-}
-
-function downloadScriptMentionsTarget(script: string, target: string): boolean {
-	return (
-		script.includes(`${target})`) ||
-		script.includes(`${target}|`) ||
-		script.includes(`|${target}`) ||
-		script.includes(`./download_model.sh ${target}`)
-	);
-}
-
-function shellVariable(script: string, name: string): string | undefined {
-	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return script.match(new RegExp(`^${escaped}=["']([^"']+)["']\\s*$`, "m"))?.[1];
+	return contextTokensFor(modelForKey(modelKey), {
+		configured: SERVER_CONTEXT_TOKENS,
+		explicit: CONTEXT_TOKENS_EXPLICIT,
+		streaming: ssdStreamingForModel(modelKey),
+	});
 }
 
 function modelDownloadDir(runtimeDir: string): string {
 	return resolve(runtimeDir, process.env.DS4_GGUF_DIR || "gguf");
-}
-
-function expectedModelFiles(script: string, model: DownloadableModel): string[] {
-	if (model.fileVariable) {
-		const fileName = shellVariable(script, model.fileVariable);
-		return fileName ? [fileName] : [];
-	}
-	if (model.shardedBaseVariable && model.shardCount) {
-		const base = shellVariable(script, model.shardedBaseVariable);
-		if (!base) return [];
-		return Array.from(
-			{ length: model.shardCount },
-			(_unused, index) => `${base}-${String(index + 1).padStart(5, "0")}-of-${String(model.shardCount).padStart(5, "0")}.gguf`,
-		);
-	}
-	return [];
 }
 
 async function discoverRuntimeDirForModels(): Promise<string | undefined> {
@@ -650,10 +465,10 @@ async function filesPresent(downloadDir: string, files: string[]): Promise<boole
 	return present.every(Boolean);
 }
 
-type InstalledArtifacts = { models: Set<ModelKey>; vision: Set<string> };
+type InstalledArtifacts = { models: Set<ModelKey>; addons: Set<string> };
 
 async function discoverInstalled(runtimeDir?: string): Promise<InstalledArtifacts> {
-	const installed: InstalledArtifacts = { models: new Set(), vision: new Set() };
+	const installed: InstalledArtifacts = { models: new Set(), addons: new Set() };
 	runtimeDir ??= await discoverRuntimeDirForModels();
 	if (!runtimeDir) return installed;
 
@@ -663,9 +478,9 @@ async function discoverInstalled(runtimeDir?: string): Promise<InstalledArtifact
 	for (const model of DOWNLOADABLE_MODELS) {
 		if (await filesPresent(downloadDir, expectedModelFiles(script, model))) installed.models.add(model.key);
 	}
-	for (const encoder of VISION_ENCODERS) {
-		const fileName = shellVariable(script, encoder.fileVariable);
-		if (fileName && (await filesPresent(downloadDir, [fileName]))) installed.vision.add(encoder.key);
+	for (const addon of ADDONS) {
+		const fileName = shellVariable(script, addon.fileVariable);
+		if (fileName && (await filesPresent(downloadDir, [fileName]))) installed.addons.add(addon.key);
 	}
 	return installed;
 }
@@ -674,37 +489,53 @@ async function discoverInstalledModelKeys(runtimeDir?: string): Promise<Set<Mode
 	return (await discoverInstalled(runtimeDir)).models;
 }
 
-function visionEncoderForModel(modelKey: ModelKey): VisionEncoder | undefined {
-	const key = modelForKey(modelKey).visionEncoder;
-	const encoder = key ? VISION_ENCODERS_BY_KEY.get(key) : undefined;
+function usableAddon(key: string | undefined): Addon | undefined {
+	const addon = addonForKey(key);
 	// ds4 rejects the DeepSeek V4.1 encoder on every backend except Metal, so
 	// elsewhere the model stays text-only instead of failing to load.
-	if (encoder?.metalOnly && process.platform !== "darwin") return undefined;
-	return encoder;
+	return addon && addonAvailableOnPlatform(addon, process.platform) ? addon : undefined;
+}
+
+function visionEncoderForModel(modelKey: ModelKey): Addon | undefined {
+	return usableAddon(modelForKey(modelKey).visionEncoder);
 }
 
 function visionEnabledForModel(modelKey: ModelKey): boolean {
 	const encoder = visionEncoderForModel(modelKey);
-	return !!encoder && installedVisionKeys.has(encoder.key);
+	return !!encoder && installedAddonKeys.has(encoder.key);
+}
+
+async function addonPath(runtimeDir: string, addon: Addon): Promise<string | undefined> {
+	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8").catch(() => undefined);
+	const fileName = script ? shellVariable(script, addon.fileVariable) : undefined;
+	if (!fileName) return undefined;
+	const downloadDir = modelDownloadDir(runtimeDir);
+	return (await filesPresent(downloadDir, [fileName])) ? join(downloadDir, fileName) : undefined;
 }
 
 async function visionEncoderPath(runtimeDir: string, modelKey: ModelKey): Promise<string | undefined> {
 	// Gate on the registered catalogue too: serverStateMatchesVision compares
 	// against it, and a disagreement here would restart the server in a loop.
 	const encoder = visionEnabledForModel(modelKey) ? visionEncoderForModel(modelKey) : undefined;
-	if (!encoder) return undefined;
-	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8").catch(() => undefined);
-	const fileName = script ? shellVariable(script, encoder.fileVariable) : undefined;
-	if (!fileName) return undefined;
-	const path = join(modelDownloadDir(runtimeDir), fileName);
-	return (await filesPresent(modelDownloadDir(runtimeDir), [fileName])) ? path : undefined;
+	return encoder ? addonPath(runtimeDir, encoder) : undefined;
+}
+
+function speculativeModeForModel(modelKey: ModelKey): SpeculativeSupport | undefined {
+	return speculativeModeFor(modelForKey(modelKey), {
+		enabled: SPECULATIVE_DECODING,
+		streaming: ssdStreamingForModel(modelKey),
+		installedAddons: installedAddonKeys,
+	});
+}
+
+async function dsparkSupportPath(runtimeDir: string, modelKey: ModelKey): Promise<string | undefined> {
+	const mode = speculativeModeForModel(modelKey);
+	const addon = mode?.kind === "dspark" ? usableAddon(mode.addon) : undefined;
+	return addon ? addonPath(runtimeDir, addon) : undefined;
 }
 
 function powerPercentForModel(modelKey: ModelKey): number {
-	// Upstream ds4 currently rejects throttling for GLM 5.2, and DeepSeek V4.1
-	// refuses to load at all unless power is 100. Keep those models at full
-	// speed while still honoring the setting for the other DeepSeek models.
-	return modelKey.startsWith("glm52-") || modelKey.startsWith("dsv41-") ? 100 : SERVER_POWER;
+	return powerPercentFor(modelForKey(modelKey), SERVER_POWER);
 }
 
 function powerArgsForModel(modelKey: ModelKey): string[] {
@@ -713,11 +544,7 @@ function powerArgsForModel(modelKey: ModelKey): string[] {
 }
 
 function ssdStreamingForModel(modelKey: ModelKey): boolean {
-	if (SSD_STREAMING !== "auto") return SSD_STREAMING === "on";
-	// Auto mode only decides for models with a known resident footprint. The
-	// others keep the historical behavior of a plain resident run.
-	const residentBytes = modelForKey(modelKey).residentBytes;
-	return !!residentBytes && residentBytes > totalmem() * RESIDENT_RAM_FRACTION;
+	return ssdStreamingFor(modelForKey(modelKey), SSD_STREAMING, totalmem());
 }
 
 function ssdStreamingArgsForModel(modelKey: ModelKey): string[] {
@@ -732,6 +559,7 @@ function serverArgsForModel(
 	modelKey: ModelKey,
 	modelPath: string,
 	visionPath: string | undefined,
+	dsparkPath: string | undefined,
 	endpoint = currentServerEndpoint(),
 ): string[] {
 	return [
@@ -747,6 +575,7 @@ function serverArgsForModel(
 		...SERVER_BASE_ARGS,
 		...ssdStreamingArgsForModel(modelKey),
 		...powerArgsForModel(modelKey),
+		...speculativeArgs(speculativeModeForModel(modelKey), dsparkPath),
 		"--kv-disk-dir",
 		kvDirForModel(modelKey),
 	];
@@ -784,6 +613,15 @@ function serverStateMatchesSsdStreaming(state: ServerState | undefined, modelKey
 
 function serverStateMatchesVision(state: ServerState | undefined, modelKey: ModelKey): boolean {
 	return !!state && state.args.includes("--vision") === visionEnabledForModel(modelKey);
+}
+
+function serverStateMatchesSpeculative(state: ServerState | undefined, modelKey: ModelKey): boolean {
+	if (!state) return false;
+	const mode = speculativeModeForModel(modelKey);
+	return (
+		state.args.includes("--mtp") === (mode?.kind === "mtp") &&
+		state.args.includes("--dspark") === (mode?.kind === "dspark")
+	);
 }
 
 async function ensureDirs(): Promise<void> {
@@ -1291,31 +1129,6 @@ function renderProgressBar(fraction: number): string {
 	return `[${bar}] ${String(Math.floor(clamped * 100)).padStart(3)}%`;
 }
 
-// Exact artifact sizes live in download_model.sh's artifact_identity(), keyed by
-// the same shell variables that name the files. Reading them keeps the progress
-// bar correct when upstream reissues a model.
-function artifactSizes(script: string): Map<string, number> {
-	const sizes = new Map<string, number>();
-	const pattern = /"\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_]+)*)"\)\s*\n\s*expected_bytes=(\d+)/g;
-	for (const match of script.matchAll(pattern)) {
-		const base = shellVariable(script, match[1]);
-		const bytes = Number(match[3]);
-		if (base && Number.isFinite(bytes)) sizes.set(`${base}${match[2]}`, bytes);
-	}
-	return sizes;
-}
-
-function expectedTotalBytes(script: string, fileNames: string[], fallback?: number): number | undefined {
-	const sizes = artifactSizes(script);
-	let total = 0;
-	for (const name of fileNames) {
-		const bytes = sizes.get(name);
-		if (!bytes) return fallback;
-		total += bytes;
-	}
-	return total || fallback;
-}
-
 function progressFileNames(script: string, fileNames: string[]): string[] {
 	const names = new Set(fileNames);
 	// Some targets download declared split artifacts before assembling the final
@@ -1742,39 +1555,35 @@ async function ensureModel(runtimeDir: string, modelKey: ModelKey, onStatus?: St
 	return resolvedModelPath;
 }
 
-async function ensureVisionEncoder(
-	runtimeDir: string,
-	encoder: VisionEncoder,
-	onStatus?: StatusCallback,
-): Promise<string> {
+async function ensureAddon(runtimeDir: string, addon: Addon, onStatus?: StatusCallback): Promise<string> {
 	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8");
-	if (!downloadScriptMentionsTarget(script, encoder.target)) {
-		throw new Error(`The ds4 checkout does not provide the ${encoder.target} download target`);
+	if (!downloadScriptMentionsTarget(script, addon.target)) {
+		throw new Error(`The ds4 checkout does not provide the ${addon.target} download target`);
 	}
-	const fileName = shellVariable(script, encoder.fileVariable);
-	if (!fileName) throw new Error(`The ds4 checkout does not name the ${encoder.target} file`);
+	const fileName = shellVariable(script, addon.fileVariable);
+	if (!fileName) throw new Error(`The ds4 checkout does not name the ${addon.target} file`);
 
-	onStatus?.(`ensuring ${encoder.target} encoder`);
+	onStatus?.(`ensuring ${addon.target}`);
 	const monitor = startDownloadMonitor(
 		modelDownloadDir(runtimeDir),
 		progressFileNames(script, [fileName]),
-		expectedTotalBytes(script, [fileName], encoder.downloadBytes),
-		`downloading ${encoder.target}`,
+		expectedTotalBytes(script, [fileName], addon.downloadBytes),
+		`downloading ${addon.target}`,
 		onStatus,
 	);
 	try {
-		await runLogged("./download_model.sh", [encoder.target], runtimeDir, `download ${encoder.target} encoder`, {
+		await runLogged("./download_model.sh", [addon.target], runtimeDir, `download ${addon.target}`, {
 			onProgressLine: (text) => monitor.setLine(text),
 		});
 	} finally {
 		monitor.stop();
 	}
 
-	// The encoder download deliberately leaves ./ds4flash.gguf alone, so resolve
+	// Add-on downloads deliberately leave ./ds4flash.gguf alone, so resolve
 	// the file in the download directory instead of following that symlink.
-	const encoderPath = join(modelDownloadDir(runtimeDir), fileName);
-	await access(encoderPath, constants.R_OK);
-	return encoderPath;
+	const path = join(modelDownloadDir(runtimeDir), fileName);
+	await access(path, constants.R_OK);
+	return path;
 }
 
 async function installedModelPath(runtimeDir: string, modelKey: ModelKey): Promise<string> {
@@ -1790,14 +1599,15 @@ async function installedModelPath(runtimeDir: string, modelKey: ModelKey): Promi
 async function ensureRuntimeReadyLocked(
 	modelKey: ModelKey,
 	onStatus?: StatusCallback,
-): Promise<{ runtimeDir: string; modelPath: string; visionPath?: string }> {
+): Promise<{ runtimeDir: string; modelPath: string; visionPath?: string; dsparkPath?: string }> {
 	const runtimeDir = await resolveRuntimeDirLocked(onStatus);
 	if (runtimeDisposed || shuttingDown) return { runtimeDir, modelPath: "" };
 	await ensureBuilt(runtimeDir, onStatus);
 	if (runtimeDisposed || shuttingDown) return { runtimeDir, modelPath: "" };
 	const modelPath = await installedModelPath(runtimeDir, modelKey);
 	const visionPath = await visionEncoderPath(runtimeDir, modelKey);
-	return { runtimeDir, modelPath, visionPath };
+	const dsparkPath = await dsparkSupportPath(runtimeDir, modelKey);
+	return { runtimeDir, modelPath, visionPath, dsparkPath };
 }
 
 async function isLockDirStale(lockDir: string): Promise<boolean> {
@@ -1964,7 +1774,8 @@ async function checkHttpReadyForModel(modelKey: ModelKey): Promise<boolean> {
 		serverStateMatchesModel(state, modelKey) &&
 		serverStateMatchesPower(state, modelKey) &&
 		serverStateMatchesSsdStreaming(state, modelKey) &&
-		serverStateMatchesVision(state, modelKey)
+		serverStateMatchesVision(state, modelKey) &&
+		serverStateMatchesSpeculative(state, modelKey)
 	);
 }
 
@@ -2044,6 +1855,7 @@ async function startServerLocked(
 	modelKey: ModelKey,
 	modelPath: string,
 	visionPath?: string,
+	dsparkPath?: string,
 ): Promise<void> {
 	const binary = configString("DS4_SERVER_BINARY") ?? join(runtimeDir, "ds4-server");
 	try {
@@ -2063,7 +1875,7 @@ async function startServerLocked(
 
 	const kvDir = kvDirForModel(modelKey);
 	await mkdir(kvDir, { recursive: true });
-	const serverArgs = serverArgsForModel(modelKey, modelPath, visionPath, endpoint);
+	const serverArgs = serverArgsForModel(modelKey, modelPath, visionPath, dsparkPath, endpoint);
 
 	await appendLog(`\n[${new Date().toISOString()}] start ds4-server (${modelKey})\n$ ${[binary, ...serverArgs].map(shellQuote).join(" ")}\n`);
 	const logFd = openSync(LOG_FILE, "a");
@@ -2147,6 +1959,10 @@ async function ensureServerManagedInner(modelKey: ModelKey, onStatus?: StatusCal
 				const vision = visionEnabledForModel(modelKey);
 				onStatus?.(`restarting ds4-server with vision ${vision ? "on" : "off"}`);
 				await stopServerPidLocked(state!.pid, `apply vision ${vision ? "on" : "off"}`);
+			} else if (!serverStateMatchesSpeculative(state, modelKey)) {
+				const mode = speculativeModeForModel(modelKey)?.kind ?? "off";
+				onStatus?.(`restarting ds4-server with speculative decoding ${mode}`);
+				await stopServerPidLocked(state!.pid, `apply speculative decoding ${mode}`);
 			} else {
 				return;
 			}
@@ -2162,11 +1978,11 @@ async function ensureServerManagedInner(modelKey: ModelKey, onStatus?: StatusCal
 		}
 		if (runtimeDisposed || shuttingDown) return;
 
-		const { runtimeDir, modelPath, visionPath } = await ensureRuntimeReadyLocked(modelKey, onStatus);
+		const { runtimeDir, modelPath, visionPath, dsparkPath } = await ensureRuntimeReadyLocked(modelKey, onStatus);
 		if (runtimeDisposed || shuttingDown) return;
 
 		onStatus?.(`starting ds4-server (${modelKey})`);
-		await startServerLocked(runtimeDir, modelKey, modelPath, visionPath);
+		await startServerLocked(runtimeDir, modelKey, modelPath, visionPath, dsparkPath);
 	}, STARTUP_LOCK_TIMEOUT_MS, true);
 
 	if (runtimeDisposed || shuttingDown) return;
@@ -2237,10 +2053,10 @@ async function downloadModelManually(modelKey: ModelKey, onStatus?: StatusCallba
 	}, STARTUP_LOCK_TIMEOUT_MS, true);
 }
 
-async function downloadVisionEncoderManually(encoder: VisionEncoder, onStatus?: StatusCallback): Promise<string> {
+async function downloadAddonManually(addon: Addon, onStatus?: StatusCallback): Promise<string> {
 	return withLock(async () => {
 		const runtimeDir = await resolveRuntimeDirLocked(onStatus);
-		return ensureVisionEncoder(runtimeDir, encoder, onStatus);
+		return ensureAddon(runtimeDir, addon, onStatus);
 	}, STARTUP_LOCK_TIMEOUT_MS, true);
 }
 
@@ -2335,20 +2151,18 @@ function registerDs4Command(pi: ExtensionAPI): void {
 				return;
 			}
 
-			type DownloadChoice = { label: string; model?: DownloadableModel; encoder?: VisionEncoder };
+			type DownloadChoice = { label: string; model?: DownloadableModel; addon?: Addon };
 			const choices: DownloadChoice[] = [
 				...DOWNLOADABLE_MODELS.map((model) => ({
 					model,
 					label: `${model.menuLabel}${installedModelKeys.has(model.key) ? " • installed" : ""}`,
 				})),
-				// Vision encoders are optional add-ons for an already downloaded
-				// language model, so they are listed separately.
-				...VISION_ENCODERS.filter((encoder) => !encoder.metalOnly || process.platform === "darwin").map(
-					(encoder) => ({
-						encoder,
-						label: `${encoder.menuLabel}${installedVisionKeys.has(encoder.key) ? " • installed" : ""}`,
-					}),
-				),
+				// Vision encoders and DSpark support files are optional add-ons for
+				// an already downloaded language model, so they are listed separately.
+				...ADDONS.filter((addon) => addonAvailableOnPlatform(addon, process.platform)).map((addon) => ({
+					addon,
+					label: `${addon.menuLabel}${installedAddonKeys.has(addon.key) ? " • installed" : ""}`,
+				})),
 			];
 			const selected = await ctx.ui.select(
 				"Download ds4 model",
@@ -2357,14 +2171,14 @@ function registerDs4Command(pi: ExtensionAPI): void {
 			const choice = choices.find((entry) => entry.label === selected);
 			if (!choice) return;
 
-			const target = choice.model?.target ?? choice.encoder!.target;
+			const target = choice.model?.target ?? choice.addon!.target;
 			ctx.ui.setStatus("ds4", `preparing ${target} download`);
 			try {
 				const path = choice.model
 					? await downloadModelManually(choice.model.key, (message) => ctx.ui.setStatus("ds4", message))
-					: await downloadVisionEncoderManually(choice.encoder!, (message) => ctx.ui.setStatus("ds4", message));
+					: await downloadAddonManually(choice.addon!, (message) => ctx.ui.setStatus("ds4", message));
 				await refreshDs4Provider(pi);
-				ctx.ui.notify(`Downloaded ${choice.model?.name ?? choice.encoder!.name}: ${path}`, "info");
+				ctx.ui.notify(`Downloaded ${choice.model?.name ?? choice.addon!.name}: ${path}`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Could not download ${target}: ${describeError(error)}`, "error");
 			} finally {
@@ -2402,15 +2216,7 @@ function ds4Model(model: DownloadableModel): Model<ProviderProtocol> {
 		provider: PROVIDER_ID,
 		baseUrl: providerBaseUrl(),
 		reasoning: true,
-		thinkingLevelMap: {
-			off: "none",
-			minimal: null,
-			low: null,
-			medium: null,
-			high: "high",
-			xhigh: null,
-			max: "max",
-		},
+		thinkingLevelMap: thinkingLevelMapFor(model),
 		input: visionEnabledForModel(model.key) ? ["text", "image"] : ["text"],
 		contextWindow,
 		maxTokens: Math.min(model.maxTokens ?? 384_000, contextWindow),
@@ -2491,7 +2297,7 @@ function createDs4Provider(): Provider<ProviderProtocol> {
 			const discovered = await discoverInstalled();
 			if (signal?.aborted) return;
 			installedModelKeys = discovered.models;
-			installedVisionKeys = discovered.vision;
+			installedAddonKeys = discovered.addons;
 		},
 	};
 }
@@ -2503,7 +2309,7 @@ function registerDs4Provider(pi: ExtensionAPI): void {
 async function refreshDs4Provider(pi: ExtensionAPI): Promise<void> {
 	const discovered = await discoverInstalled(resolvedRuntimeDir);
 	installedModelKeys = discovered.models;
-	installedVisionKeys = discovered.vision;
+	installedAddonKeys = discovered.addons;
 	registerDs4Provider(pi);
 }
 
@@ -2521,7 +2327,7 @@ export default async function (pi: ExtensionAPI) {
 	providerStatusCallback = undefined;
 	const installed = await discoverInstalled();
 	installedModelKeys = installed.models;
-	installedVisionKeys = installed.vision;
+	installedAddonKeys = installed.addons;
 	currentEndpoint = undefined;
 
 	await initializeEndpoint();

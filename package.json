@@ -1,15 +1,19 @@
 {
   "name": "pi-ds4",
-  "version": "0.1.0",
-  "description": "Pi provider extension for local ds4.c DeepSeek V4, DeepSeek V4.1 and GLM 5.2 inference.",
+  "version": "0.2.0",
+  "description": "Pi provider extension for local ds4.c DeepSeek V4, DeepSeek V4.1, GLM 5.2/5.3 and Qwen3.8 inference.",
   "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
     "ds4",
     "deepseek",
-    "glm"
+    "glm",
+    "qwen"
   ],
   "pi": {
     "extensions": [
@@ -21,6 +25,7 @@
   },
   "files": [
     "index.ts",
+    "catalog.ts",
     "ds4-watchdog.sh",
     "install-pi-extension-local.sh",
     "settings.example.json",
@@ -40,5 +45,9 @@
     "@earendil-works/pi-coding-agent": {
       "optional": true
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kaanozdokmeci/pi-ds4.git"
   }
 }

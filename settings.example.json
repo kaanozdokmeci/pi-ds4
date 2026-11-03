@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/mitsuhiko/pi-ds4/main/settings.schema.json",
+  "$schema": "https://raw.githubusercontent.com/kaanozdokmeci/pi-ds4/main/settings.schema.json",
   "protocol": "openai-responses",
   "apiKey": "dsv4-local",
   "supportRepo": "https://github.com/antirez/ds4",
@@ -9,6 +9,7 @@
   "contextTokens": 393216,
   "power": 100,
   "ssdStreaming": "auto",
+  "speculativeDecoding": false,
   "readyTimeoutMs": 600000,
   "serverBinary": null,
   "watchdogScript": null

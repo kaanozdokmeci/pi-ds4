@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/mitsuhiko/pi-ds4/main/settings.schema.json",
+  "$id": "https://raw.githubusercontent.com/kaanozdokmeci/pi-ds4/main/settings.schema.json",
   "title": "pi-ds4 settings",
   "description": "Configuration for ~/.pi/ds4/settings.json. Environment variables with the same names override these values.",
   "type": "object",
@@ -51,6 +51,11 @@
     "DS4_SSD_STREAMING": { "$ref": "#/$defs/ssdStreaming" },
     "ds4_ssd_streaming": { "$ref": "#/$defs/ssdStreaming" },
 
+    "speculativeDecoding": { "$ref": "#/$defs/speculativeDecoding" },
+    "speculative_decoding": { "$ref": "#/$defs/speculativeDecoding" },
+    "DS4_SPECULATIVE_DECODING": { "$ref": "#/$defs/speculativeDecoding" },
+    "ds4_speculative_decoding": { "$ref": "#/$defs/speculativeDecoding" },
+
     "readyTimeoutMs": { "$ref": "#/$defs/nullableNumber" },
     "ready_timeout_ms": { "$ref": "#/$defs/nullableNumber" },
     "DS4_READY_TIMEOUT_MS": { "$ref": "#/$defs/nullableNumber" },
@@ -84,13 +89,18 @@
       "maximum": 100,
       "pattern": "^(?:[1-9]|[1-9][0-9]|100)$",
       "default": 100,
-      "description": "GPU duty-cycle target from 1 to 100. Lower values apply to DeepSeek V4 models; GLM 5.2 and DeepSeek V4.1 always run at 100."
+      "description": "GPU duty-cycle target from 1 to 100. Lower values apply to DeepSeek V4 Flash and Pro; DeepSeek V4.1, GLM and Qwen3.8 always run at 100."
     },
     "ssdStreaming": {
       "type": ["boolean", "string", "null"],
       "enum": [true, false, "auto", "true", "false", "yes", "no", "on", "off", "1", "0", null],
       "default": "auto",
-      "description": "Run ds4-server with --ssd-streaming. auto (default) enables it for models whose resident weights do not fit in system RAM, such as DeepSeek V4.1."
+      "description": "Run ds4-server with --ssd-streaming. auto (default) enables it for models whose resident weights do not fit in system RAM, such as DeepSeek V4.1 and GLM 5.3. Qwen3.8 never streams."
+    },
+    "speculativeDecoding": {
+      "type": ["boolean", "number", "string", "null"],
+      "default": false,
+      "description": "Enable ds4 speculative decoding: embedded MTP for GLM 5.3 Flash and Qwen3.8, and DSpark for resident DeepSeek V4 Flash models once their support file is downloaded. Boolean or one of true/false, yes/no, on/off, or 1/0."
     },
     "protocol": {
       "type": ["string", "null"],
