@@ -246,7 +246,10 @@ export const DOWNLOADABLE_MODELS: DownloadableModel[] = [
 		menuLabel: "GLM 5.3 Flash / Q2 — about 90 GiB; ≥128 GB RAM",
 		// Upstream calls Q2 close to a 128 GB machine's budget and starts it
 		// with a modest context; the GLM memory guard refuses oversized ones.
-		defaultContextLimit: 131_072,
+		// On a 128 GiB M3 Max (2026-11-11) the guard planned 94.49 GiB at
+		// 131072 tokens and 95.96 GiB at 262144, and decoding speed stayed
+		// at about 21 tokens/s.
+		defaultContextLimit: 262_144,
 		residentBytes: 90 * GIB,
 		streamingContextLimit: 65_536,
 		visionEncoder: "glm53-flash-vision",

@@ -106,7 +106,7 @@ describe("contextTokensFor", () => {
 	});
 
 	it("starts GLM 5.3 Flash Q2 with a modest context unless configured explicitly", () => {
-		assert.equal(context("glm53-flash-q2"), 131_072);
+		assert.equal(context("glm53-flash-q2"), 262_144);
 		assert.equal(context("glm53-flash-q2", { explicit: true }), DEFAULT_CONTEXT);
 	});
 

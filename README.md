@@ -84,8 +84,9 @@ Its context is capped at the native 262144 tokens, and upstream has no SSD
 streaming path for it.
 
 GLM 5.3 Flash Q2 is close to a 128 GB machine's memory budget, so it starts
-with a 131072-token context. Set `contextTokens` to change that; ds4 refuses to
-start when the context does not fit, and the reason is in the log.
+with a 262144-token context, a quarter of its native one. On a 128 GiB Mac ds4
+plans 96 GiB for it. Set `contextTokens` to change that; ds4 refuses to start
+when the context does not fit, and the reason is in the log.
 
 DeepSeek V4.1 Flash needs much more disk than RAM: 341 GiB on disk for Q2 and
 483 GiB for Q4, because its Engram tables stay on disk and are read as needed.
