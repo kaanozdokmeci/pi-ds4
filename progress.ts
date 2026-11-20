@@ -35,11 +35,7 @@ export function renderProgressBar(fraction: number): string {
 // Describes bytes received so far. A download that grows past its expected
 // size means the expected size is stale, for example after upstream reissued
 // the file; it is then shown without a bar or ETA rather than as a full bar.
-export function downloadProgressText(
-	bytes: number,
-	totalBytes: number | undefined,
-	bytesPerSecond: number,
-): string {
+export function downloadProgressText(bytes: number, totalBytes: number | undefined, bytesPerSecond: number): string {
 	const total = totalBytes && bytes <= totalBytes ? totalBytes : undefined;
 	const details = [total ? `${formatBytes(bytes)} / ${formatBytes(total)}` : formatBytes(bytes)];
 	if (bytesPerSecond > 0) details.push(`${formatBytes(bytesPerSecond)}/s`);

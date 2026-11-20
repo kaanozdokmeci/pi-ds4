@@ -133,8 +133,7 @@ export const ADDONS: Addon[] = [
 		target: "ds4f-dspark",
 		fileVariable: "DS4F_DSPARK_FILE",
 		name: "DeepSeek V4 Flash DSpark support",
-		menuLabel:
-			"DeepSeek V4 Flash / DSpark speculative decoding \u2014 about 5.6 GiB; used with speculativeDecoding",
+		menuLabel: "DeepSeek V4 Flash / DSpark speculative decoding \u2014 about 5.6 GiB; used with speculativeDecoding",
 		downloadBytes: 5_989_114_272,
 	},
 	{
@@ -511,7 +510,8 @@ export function expectedModelFiles(script: string, model: DownloadableModel): st
 		if (!base) return [];
 		return Array.from(
 			{ length: model.shardCount },
-			(_unused, index) => `${base}-${String(index + 1).padStart(5, "0")}-of-${String(model.shardCount).padStart(5, "0")}.gguf`,
+			(_unused, index) =>
+				`${base}-${String(index + 1).padStart(5, "0")}-of-${String(model.shardCount).padStart(5, "0")}.gguf`,
 		);
 	}
 	return [];

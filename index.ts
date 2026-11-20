@@ -1,10 +1,4 @@
-import {
-	createProvider,
-	lazyStream,
-	type Model,
-	type Provider,
-	type ProviderStreams,
-} from "@earendil-works/pi-ai";
+import { createProvider, lazyStream, type Model, type Provider, type ProviderStreams } from "@earendil-works/pi-ai";
 // Pi's extension loader exposes the built-in lazy API factories through this entry point.
 import { anthropicMessagesApi, openAICompletionsApi, openAIResponsesApi } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -122,7 +116,8 @@ function configNumber(envName: string, defaultValue: number): number {
 	const value = settingValue(envName);
 	if (value === undefined || value === null || value === "") return defaultValue;
 	const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-	if (!Number.isFinite(number)) throw new Error(`${envName} must be a finite number in the environment or ${SETTINGS_FILE}`);
+	if (!Number.isFinite(number))
+		throw new Error(`${envName} must be a finite number in the environment or ${SETTINGS_FILE}`);
 	return number;
 }
 
@@ -712,7 +707,14 @@ async function readLogTail(): Promise<string[]> {
 }
 
 // Pop-up frame lines shared by the log and download progress viewers.
-function frameBorder(theme: LogTheme, left: string, fill: string, right: string, width: number, title?: string): string {
+function frameBorder(
+	theme: LogTheme,
+	left: string,
+	fill: string,
+	right: string,
+	width: number,
+	title?: string,
+): string {
 	const innerWidth = Math.max(0, width - 2);
 	let inner = theme.fg("border", fill.repeat(innerWidth));
 	if (title) {
@@ -768,7 +770,10 @@ class Ds4LogViewer implements Component {
 	}
 
 	private clampScroll(): void {
-		this.scrollFromBottom = Math.max(0, Math.min(this.scrollFromBottom, Math.max(0, this.lines.length - this.bodyHeight())));
+		this.scrollFromBottom = Math.max(
+			0,
+			Math.min(this.scrollFromBottom, Math.max(0, this.lines.length - this.bodyHeight())),
+		);
 	}
 
 	handleInput(data: string): void {
@@ -860,7 +865,9 @@ class DownloadProgressViewer implements Component {
 		const body: string[] = [];
 		for (const download of downloads) {
 			if (body.length > 0) body.push(frameRow(this.theme, "", width));
-			body.push(frameRow(this.theme, `${download.name} (${download.target})`, width, (value) => this.theme.fg("accent", value)));
+			body.push(
+				frameRow(this.theme, `${download.name} (${download.target})`, width, (value) => this.theme.fg("accent", value)),
+			);
 			body.push(frameRow(this.theme, `  ${downloadRowText(download)}`, width));
 		}
 		if (body.length === 0) body.push(frameRow(this.theme, "No ds4 downloads are running.", width));
@@ -1011,7 +1018,11 @@ async function writePortStateForReservation(endpoint: ServerEndpoint): Promise<v
 	await writeJsonAtomic(PORT_FILE, state);
 }
 
-async function writePortStateForServer(endpoint: ServerEndpoint, pid: number, serverProcessStart?: string): Promise<void> {
+async function writePortStateForServer(
+	endpoint: ServerEndpoint,
+	pid: number,
+	serverProcessStart?: string,
+): Promise<void> {
 	const now = Date.now();
 	const state: PortState = {
 		managedBy: MANAGED_BY,
@@ -1052,7 +1063,9 @@ async function resolveEndpointLocked(): Promise<ServerEndpoint> {
 
 	currentEndpoint = endpointForPort(await allocateRandomPort());
 	await writePortStateForReservation(currentEndpoint);
-	await appendLog(`\n[${new Date().toISOString()}] reserved ds4-server endpoint ${currentEndpoint.origin} for pi pid=${process.pid}\n`);
+	await appendLog(
+		`\n[${new Date().toISOString()}] reserved ds4-server endpoint ${currentEndpoint.origin} for pi pid=${process.pid}\n`,
+	);
 	return currentEndpoint;
 }
 
@@ -1210,13 +1223,7 @@ async function measureDownloadBytes(downloadDir: string, fileNames: string[]): P
 	// large incomplete downloads from unrelated models.
 	for (const fileName of fileNames) {
 		const relativeDir = dirname(fileName);
-		const hfDir = join(
-			downloadDir,
-			".cache",
-			"huggingface",
-			"download",
-			relativeDir === "." ? "" : relativeDir,
-		);
+		const hfDir = join(downloadDir, ".cache", "huggingface", "download", relativeDir === "." ? "" : relativeDir);
 		const prefix = `${huggingFaceIncompletePrefix(fileName)}.`;
 		const hfEntries = await readdir(hfDir).catch(() => [] as string[]);
 		for (const entry of hfEntries) {
@@ -1376,7 +1383,13 @@ function createProgressReporter(emit: ((text: string) => void) | undefined) {
 	return { onChunk, flush };
 }
 
-async function runLogged(command: string, args: string[], cwd: string, label: string, options: RunLoggedOptions = {}): Promise<void> {
+async function runLogged(
+	command: string,
+	args: string[],
+	cwd: string,
+	label: string,
+	options: RunLoggedOptions = {},
+): Promise<void> {
 	if (runtimeDisposed || shuttingDown) throw new Error(`${label} cancelled`);
 
 	await appendLog(`\n[${new Date().toISOString()}] ${label}\n$ ${[command, ...args].map(shellQuote).join(" ")}\n`);
@@ -1484,13 +1497,10 @@ async function updateManagedSupportCheckout(runtimeDir: string, onStatus?: Statu
 	const before = (await execCapture("git", ["-C", runtimeDir, "rev-parse", "HEAD"], 5_000))?.trim();
 	onStatus?.("checking for the latest ds4 runtime and model manifest");
 	try {
-		await runLogged(
-			"git",
-			["pull", "--ff-only", "origin", SUPPORT_BRANCH],
-			runtimeDir,
-			"update ds4 support checkout",
-			{ onStatus, progressPrefix: "updating ds4 support checkout" },
-		);
+		await runLogged("git", ["pull", "--ff-only", "origin", SUPPORT_BRANCH], runtimeDir, "update ds4 support checkout", {
+			onStatus,
+			progressPrefix: "updating ds4 support checkout",
+		});
 	} catch (error) {
 		// Keep an already installed local runtime usable while offline. The failure
 		// remains visible in the log and the next session retries the update.
@@ -1914,7 +1924,9 @@ async function startServerLocked(
 	await mkdir(kvDir, { recursive: true });
 	const serverArgs = serverArgsForModel(modelKey, modelPath, visionPath, dsparkPath, endpoint);
 
-	await appendLog(`\n[${new Date().toISOString()}] start ds4-server (${modelKey})\n$ ${[binary, ...serverArgs].map(shellQuote).join(" ")}\n`);
+	await appendLog(
+		`\n[${new Date().toISOString()}] start ds4-server (${modelKey})\n$ ${[binary, ...serverArgs].map(shellQuote).join(" ")}\n`,
+	);
 	const logFd = openSync(LOG_FILE, "a");
 	let childPid: number | undefined;
 	try {
@@ -1961,66 +1973,70 @@ async function ensureServerManagedInner(modelKey: ModelKey, onStatus?: StatusCal
 	if (runtimeDisposed || shuttingDown) return;
 	let stoppingPid: number | undefined;
 
-	await withLock(async () => {
-		await resolveEndpointLocked();
-		await resolveRuntimeDirLocked(onStatus);
-		await activateLease();
-		if (runtimeDisposed || shuttingDown) return;
-		await touchLease();
-		await pruneLeases();
+	await withLock(
+		async () => {
+			await resolveEndpointLocked();
+			await resolveRuntimeDirLocked(onStatus);
+			await activateLease();
+			if (runtimeDisposed || shuttingDown) return;
+			await touchLease();
+			await pruneLeases();
 
-		const state = await readState();
-		if (await isServerStateForLiveDs4(state)) {
-			if (state!.stopping) {
-				stoppingPid = state!.pid;
-				return;
+			const state = await readState();
+			if (await isServerStateForLiveDs4(state)) {
+				if (state!.stopping) {
+					stoppingPid = state!.pid;
+					return;
+				}
+				if (runtimeCheckoutUpdated) {
+					onStatus?.("restarting ds4-server after runtime update");
+					await stopServerPidLocked(state!.pid, "apply updated ds4 runtime/model manifest");
+				} else if (!serverStateMatchesEndpoint(state)) {
+					onStatus?.("moving ds4-server to reserved port");
+					await stopServerPidLocked(state!.pid, "move ds4-server to reserved port");
+				} else if (!serverStateMatchesModel(state, modelKey)) {
+					onStatus?.(`switching ds4-server to ${modelKey}`);
+					await stopServerPidLocked(state!.pid, `switch ds4-server to ${modelKey}`);
+				} else if (!serverStateMatchesPower(state, modelKey)) {
+					const power = powerPercentForModel(modelKey);
+					onStatus?.(`restarting ds4-server at ${power}% power`);
+					await stopServerPidLocked(state!.pid, `apply configured ${power}% power`);
+				} else if (!serverStateMatchesSsdStreaming(state, modelKey)) {
+					const streaming = ssdStreamingForModel(modelKey);
+					onStatus?.(`restarting ds4-server with SSD streaming ${streaming ? "on" : "off"}`);
+					await stopServerPidLocked(state!.pid, `apply SSD streaming ${streaming ? "on" : "off"}`);
+				} else if (!serverStateMatchesVision(state, modelKey)) {
+					const vision = visionEnabledForModel(modelKey);
+					onStatus?.(`restarting ds4-server with vision ${vision ? "on" : "off"}`);
+					await stopServerPidLocked(state!.pid, `apply vision ${vision ? "on" : "off"}`);
+				} else if (!serverStateMatchesSpeculative(state, modelKey)) {
+					const mode = speculativeModeForModel(modelKey)?.kind ?? "off";
+					onStatus?.(`restarting ds4-server with speculative decoding ${mode}`);
+					await stopServerPidLocked(state!.pid, `apply speculative decoding ${mode}`);
+				} else {
+					return;
+				}
 			}
-			if (runtimeCheckoutUpdated) {
-				onStatus?.("restarting ds4-server after runtime update");
-				await stopServerPidLocked(state!.pid, "apply updated ds4 runtime/model manifest");
-			} else if (!serverStateMatchesEndpoint(state)) {
-				onStatus?.("moving ds4-server to reserved port");
-				await stopServerPidLocked(state!.pid, "move ds4-server to reserved port");
-			} else if (!serverStateMatchesModel(state, modelKey)) {
-				onStatus?.(`switching ds4-server to ${modelKey}`);
-				await stopServerPidLocked(state!.pid, `switch ds4-server to ${modelKey}`);
-			} else if (!serverStateMatchesPower(state, modelKey)) {
-				const power = powerPercentForModel(modelKey);
-				onStatus?.(`restarting ds4-server at ${power}% power`);
-				await stopServerPidLocked(state!.pid, `apply configured ${power}% power`);
-			} else if (!serverStateMatchesSsdStreaming(state, modelKey)) {
-				const streaming = ssdStreamingForModel(modelKey);
-				onStatus?.(`restarting ds4-server with SSD streaming ${streaming ? "on" : "off"}`);
-				await stopServerPidLocked(state!.pid, `apply SSD streaming ${streaming ? "on" : "off"}`);
-			} else if (!serverStateMatchesVision(state, modelKey)) {
-				const vision = visionEnabledForModel(modelKey);
-				onStatus?.(`restarting ds4-server with vision ${vision ? "on" : "off"}`);
-				await stopServerPidLocked(state!.pid, `apply vision ${vision ? "on" : "off"}`);
-			} else if (!serverStateMatchesSpeculative(state, modelKey)) {
-				const mode = speculativeModeForModel(modelKey)?.kind ?? "off";
-				onStatus?.(`restarting ds4-server with speculative decoding ${mode}`);
-				await stopServerPidLocked(state!.pid, `apply speculative decoding ${mode}`);
-			} else {
-				return;
+
+			if (state?.pid) await clearState();
+			if (await checkHttpReady()) {
+				const pid = await findListeningDs4ServerPid();
+				if (pid) {
+					onStatus?.(`switching ds4-server to ${modelKey}`);
+					await stopServerPidLocked(pid, `replace unknown ds4-server with ${modelKey}`);
+				}
 			}
-		}
+			if (runtimeDisposed || shuttingDown) return;
 
-		if (state?.pid) await clearState();
-		if (await checkHttpReady()) {
-			const pid = await findListeningDs4ServerPid();
-			if (pid) {
-				onStatus?.(`switching ds4-server to ${modelKey}`);
-				await stopServerPidLocked(pid, `replace unknown ds4-server with ${modelKey}`);
-			}
-		}
-		if (runtimeDisposed || shuttingDown) return;
+			const { runtimeDir, modelPath, visionPath, dsparkPath } = await ensureRuntimeReadyLocked(modelKey, onStatus);
+			if (runtimeDisposed || shuttingDown) return;
 
-		const { runtimeDir, modelPath, visionPath, dsparkPath } = await ensureRuntimeReadyLocked(modelKey, onStatus);
-		if (runtimeDisposed || shuttingDown) return;
-
-		onStatus?.(`starting ds4-server (${modelKey})`);
-		await startServerLocked(runtimeDir, modelKey, modelPath, visionPath, dsparkPath);
-	}, STARTUP_LOCK_TIMEOUT_MS, true);
+			onStatus?.(`starting ds4-server (${modelKey})`);
+			await startServerLocked(runtimeDir, modelKey, modelPath, visionPath, dsparkPath);
+		},
+		STARTUP_LOCK_TIMEOUT_MS,
+		true,
+	);
 
 	if (runtimeDisposed || shuttingDown) return;
 
@@ -2162,10 +2178,7 @@ function startBackgroundDownload(pi: ExtensionAPI, ctx: ExtensionCommandContext,
 			activeDownloads.delete(job.target);
 			renderDownloadStatus();
 		});
-	ctx.ui.notify(
-		`Downloading ${job.name} in the background; see the status line or /ds4 → Download progress`,
-		"info",
-	);
+	ctx.ui.notify(`Downloading ${job.name} in the background; see the status line or /ds4 → Download progress`, "info");
 }
 
 async function showDownloadProgress(ctx: ExtensionCommandContext): Promise<void> {
@@ -2266,8 +2279,7 @@ function registerDs4Command(pi: ExtensionAPI): void {
 					return;
 				}
 
-				const activeModelKey =
-					ctx.model?.provider === PROVIDER_ID ? modelKeyForModelId(ctx.model.id) : undefined;
+				const activeModelKey = ctx.model?.provider === PROVIDER_ID ? modelKeyForModelId(ctx.model.id) : undefined;
 				let modelKey = activeModelKey && installedModelKeys.has(activeModelKey) ? activeModelKey : undefined;
 				if (!modelKey) {
 					const choices = available.map((model) => ({
@@ -2381,10 +2393,7 @@ function protocolStreams(): ProviderStreams {
 }
 
 function managedStreams(upstream: ProviderStreams): ProviderStreams {
-	const prepare = (
-		model: Model<any>,
-		run: () => ReturnType<ProviderStreams["stream"]>,
-	) =>
+	const prepare = (model: Model<any>, run: () => ReturnType<ProviderStreams["stream"]>) =>
 		lazyStream(model, async () => {
 			const modelKey = modelKeyForModelId(model.id);
 			if (!modelKey || !installedModelKeys.has(modelKey)) {

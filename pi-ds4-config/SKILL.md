@@ -13,10 +13,10 @@ Minimal example:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/kaanozdokmeci/pi-ds4/main/settings.schema.json",
-  "protocol": "openai-responses",
-  "contextTokens": 393216,
-  "readyTimeoutMs": 900000
+	"$schema": "https://raw.githubusercontent.com/kaanozdokmeci/pi-ds4/main/settings.schema.json",
+	"protocol": "openai-responses",
+	"contextTokens": 393216,
+	"readyTimeoutMs": 900000
 }
 ```
 

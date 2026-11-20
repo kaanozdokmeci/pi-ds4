@@ -53,25 +53,25 @@ prints installation instructions when it is missing.
 
 ## Models
 
-| Pi model | Model | Recommended RAM |
-|---|---|---:|
-| `ds4/qwen38-flash-q2` | Qwen3.8 Flash Next Q2 | 64 GB |
-| `ds4/qwen38-flash-q4` | Qwen3.8 Flash Next Q4 | 128 GB |
-| `ds4/dsv4-flash-q2` | DeepSeek V4 Flash Q2 imatrix | 96 GB |
-| `ds4/dsv4-flash-vision-q2` | DeepSeek V4 Flash Vision Experimental Q2 | 96 GB |
-| `ds4/dsv4-flash-q2q4` | DeepSeek V4 Flash mixed Q2/Q4 imatrix | 128 GB |
-| `ds4/dsv4-flash-vision-q2q4` | DeepSeek V4 Flash Vision Experimental mixed Q2/Q4 | 128 GB |
-| `ds4/glm53-flash-q2` | GLM 5.3 Flash Q2 | 128 GB |
-| `ds4/dsv4-flash-q4` | DeepSeek V4 Flash Q4 imatrix | 256 GB |
-| `ds4/glm53-flash-q4` | GLM 5.3 Flash Q4 | 256 GB, or SSD streaming |
-| `ds4/glm53-full-q2` | GLM 5.3 IQ2 XXS | 256 GB, or SSD streaming |
-| `ds4/dsv41-flash-q2` | DeepSeek V4.1 Flash Q2 | 192 GB, or SSD streaming |
-| `ds4/dsv41-flash-q4` | DeepSeek V4.1 Flash Q4 | 512 GB, or SSD streaming |
-| `ds4/dsv4-pro-q2` | DeepSeek V4 Pro Q2 imatrix | 512 GB |
-| `ds4/glm52-iq2xxs` | GLM 5.2 IQ2 XXS | 256 GB |
-| `ds4/glm52-q2` | GLM 5.2 Q2 | 384 GB |
-| `ds4/glm52-q4` | GLM 5.2 Q4 | 512 GB |
-| `ds4/glm52-q4-xl` | GLM 5.2 Unsloth Q4 XL | 512 GB |
+| Pi model                     | Model                                             |          Recommended RAM |
+| ---------------------------- | ------------------------------------------------- | -----------------------: |
+| `ds4/qwen38-flash-q2`        | Qwen3.8 Flash Next Q2                             |                    64 GB |
+| `ds4/qwen38-flash-q4`        | Qwen3.8 Flash Next Q4                             |                   128 GB |
+| `ds4/dsv4-flash-q2`          | DeepSeek V4 Flash Q2 imatrix                      |                    96 GB |
+| `ds4/dsv4-flash-vision-q2`   | DeepSeek V4 Flash Vision Experimental Q2          |                    96 GB |
+| `ds4/dsv4-flash-q2q4`        | DeepSeek V4 Flash mixed Q2/Q4 imatrix             |                   128 GB |
+| `ds4/dsv4-flash-vision-q2q4` | DeepSeek V4 Flash Vision Experimental mixed Q2/Q4 |                   128 GB |
+| `ds4/glm53-flash-q2`         | GLM 5.3 Flash Q2                                  |                   128 GB |
+| `ds4/dsv4-flash-q4`          | DeepSeek V4 Flash Q4 imatrix                      |                   256 GB |
+| `ds4/glm53-flash-q4`         | GLM 5.3 Flash Q4                                  | 256 GB, or SSD streaming |
+| `ds4/glm53-full-q2`          | GLM 5.3 IQ2 XXS                                   | 256 GB, or SSD streaming |
+| `ds4/dsv41-flash-q2`         | DeepSeek V4.1 Flash Q2                            | 192 GB, or SSD streaming |
+| `ds4/dsv41-flash-q4`         | DeepSeek V4.1 Flash Q4                            | 512 GB, or SSD streaming |
+| `ds4/dsv4-pro-q2`            | DeepSeek V4 Pro Q2 imatrix                        |                   512 GB |
+| `ds4/glm52-iq2xxs`           | GLM 5.2 IQ2 XXS                                   |                   256 GB |
+| `ds4/glm52-q2`               | GLM 5.2 Q2                                        |                   384 GB |
+| `ds4/glm52-q4`               | GLM 5.2 Q4                                        |                   512 GB |
+| `ds4/glm52-q4-xl`            | GLM 5.2 Unsloth Q4 XL                             |                   512 GB |
 
 These are conservative full-residency recommendations. ds4 can also stream
 from SSD or run across multiple machines, with different performance tradeoffs.
@@ -103,22 +103,22 @@ from Flash 0731. Their downloads include the matching vision encoder.
 
 Pi's thinking levels map to ds4's reasoning effort per model family:
 
-| Family | Levels |
-|---|---|
-| DeepSeek V4, GLM | off, high, max |
-| DeepSeek V4.1 | off, low (effort 25), medium (50), high (75), max (100) |
-| Qwen3.8 | off, low, medium, high |
+| Family           | Levels                                                  |
+| ---------------- | ------------------------------------------------------- |
+| DeepSeek V4, GLM | off, high, max                                          |
+| DeepSeek V4.1    | off, low (effort 25), medium (50), high (75), max (100) |
+| Qwen3.8          | off, low, medium, high                                  |
 
 ## Images
 
 Vision encoders are optional add-ons in `/ds4` → **Download model**:
 
-| Encoder | Models | Size |
-|---|---|---:|
-| DeepSeek V4.1 Flash | `dsv41-flash-*`, Metal only | 0.9 GiB |
+| Encoder                               | Models                                             |    Size |
+| ------------------------------------- | -------------------------------------------------- | ------: |
+| DeepSeek V4.1 Flash                   | `dsv41-flash-*`, Metal only                        | 0.9 GiB |
 | DeepSeek V4 Flash Vision Experimental | `dsv4-flash-vision-*` (included in their download) | 0.9 GiB |
-| GLM 5.3 Flash | `glm53-flash-*` | 1.1 GB |
-| Qwen3.8 Flash Next | `qwen38-flash-*` | 0.6 GB |
+| GLM 5.3 Flash                         | `glm53-flash-*`                                    |  1.1 GB |
+| Qwen3.8 Flash Next                    | `qwen38-flash-*`                                   |  0.6 GB |
 
 When the encoder for a model is present, the next server start adds `--vision`
 and the model accepts image input in Pi. ds4-server accepts up to 256 inline
@@ -154,9 +154,9 @@ Most users do not need any configuration. Optional settings live in
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/kaanozdokmeci/pi-ds4/main/settings.schema.json",
-  "protocol": "openai-responses",
-  "readyTimeoutMs": 900000
+	"$schema": "https://raw.githubusercontent.com/kaanozdokmeci/pi-ds4/main/settings.schema.json",
+	"protocol": "openai-responses",
+	"readyTimeoutMs": 900000
 }
 ```
 

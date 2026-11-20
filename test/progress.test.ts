@@ -75,10 +75,7 @@ describe("downloadsSummaryText", () => {
 			downloadsSummaryText([download({ bytes: GIB, totalBytes: 2 * GIB }), download({ bytes: GIB })]),
 			"ds4: downloading 2 models",
 		);
-		assert.equal(
-			downloadsSummaryText([download({ bytes: 3 * GIB, totalBytes: 2 * GIB })]),
-			"ds4: downloading 1 model",
-		);
+		assert.equal(downloadsSummaryText([download({ bytes: 3 * GIB, totalBytes: 2 * GIB })]), "ds4: downloading 1 model");
 	});
 });
 

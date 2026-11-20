@@ -195,7 +195,7 @@ describe("download_model.sh parsing", () => {
 		'DS41_Q4_FILE="DeepSeek-V4.1-Flash-Q4.gguf"',
 		'GLM_UNSLOTH_Q4_LOCAL_BASE="GLM-5.2-UD-Q4_K_XL"',
 		'QWEN38_Q2_FILE="Qwen3.8-Flash-Next-Q2.gguf"',
-		"case \"$MODEL\" in",
+		'case "$MODEL" in',
 		"    qwen38-q2|qwen38-iq2)",
 		"    ds41f-q4)",
 		"esac",
@@ -244,7 +244,8 @@ describe("upstream download_model.sh", { skip: upstreamScript ? false : `no scri
 		const declared = artifactSizes(upstreamScript!);
 		for (const item of [...DOWNLOADABLE_MODELS, ...ADDONS]) {
 			if ("shardCount" in item && item.shardCount) continue;
-			const files = "fileVariable" in item && item.fileVariable ? [shellVariable(upstreamScript!, item.fileVariable)!] : [];
+			const files =
+				"fileVariable" in item && item.fileVariable ? [shellVariable(upstreamScript!, item.fileVariable)!] : [];
 			const known = files.every((file) => declared.has(file));
 			assert.ok(known || (item.downloadBytes ?? 0) > 0, item.key);
 		}
