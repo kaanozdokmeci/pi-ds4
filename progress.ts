@@ -54,9 +54,9 @@ export type DownloadProgress = {
 	name: string;
 	kind: "model" | "addon";
 	bytes: number;
-	totalBytes?: number;
+	totalBytes?: number | undefined;
 	bytesPerSecond: number;
-	phase?: string;
+	phase?: string | undefined;
 };
 
 function hasKnownTotal(download: DownloadProgress): download is DownloadProgress & { totalBytes: number } {

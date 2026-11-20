@@ -1,5 +1,21 @@
+# Dependencies
 node_modules/
+
+# Package manager logs
 npm-debug.log*
-.DS_Store
+
+# Environment and local configuration
+.env
+mise.local.toml
+
+# Pi package state from local installs
 .pi/npm/
 .pi/git/
+
+# OS files
+.DS_Store
+
+# Local agent/project notes
+DESIRES.md
+LEARNINGS.md
+MISTAKES.md

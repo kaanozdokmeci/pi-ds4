@@ -360,7 +360,7 @@ export function modelForKey(modelKey: ModelKey): DownloadableModel {
 }
 
 export function modelKeyForModelId(modelId: string | undefined): ModelKey | undefined {
-	return modelId && MODELS_BY_KEY.has(modelId as ModelKey) ? (modelId as ModelKey) : undefined;
+	return modelId ? DOWNLOADABLE_MODELS.find((model) => model.key === modelId)?.key : undefined;
 }
 
 export function addonForKey(key: string | undefined): Addon | undefined {
@@ -439,7 +439,7 @@ export type ServerStartPlan = {
 	streaming: boolean;
 	contextTokens: number;
 	vision: boolean;
-	speculative?: SpeculativeSupport;
+	speculative?: SpeculativeSupport | undefined;
 	powerPercent: number;
 	totalMemoryBytes: number;
 };
@@ -524,9 +524,11 @@ export function artifactSizes(script: string): Map<string, number> {
 	const sizes = new Map<string, number>();
 	const pattern = /"\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_]+)*)"\)\s*\n\s*expected_bytes=(\d+)/g;
 	for (const match of script.matchAll(pattern)) {
-		const base = shellVariable(script, match[1]);
-		const bytes = Number(match[3]);
-		if (base && Number.isFinite(bytes)) sizes.set(`${base}${match[2]}`, bytes);
+		const [, variable, suffix = "", size] = match;
+		if (variable === undefined) continue;
+		const base = shellVariable(script, variable);
+		const bytes = Number(size);
+		if (base && Number.isFinite(bytes)) sizes.set(`${base}${suffix}`, bytes);
 	}
 	return sizes;
 }

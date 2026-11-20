@@ -184,6 +184,10 @@ To use this extension checkout with an existing ds4 checkout:
 If `~/.pi/ds4/support` already points elsewhere, rerun with `--force`. Existing
 model downloads are preserved when possible.
 
-Run the tests with `npm test`. Set `DS4_DOWNLOAD_SCRIPT` to a ds4 checkout's
+Development tools come from [mise](https://mise.jdx.dev). Run `mise run init` once to
+install the locked npm dependencies and the Git hooks, and `mise run check` before committing.
+It runs formatting, lint, type and workflow checks through hk, the tests, and `npm audit`.
+
+Run the tests alone with `npm test`. Set `DS4_DOWNLOAD_SCRIPT` to a ds4 checkout's
 `download_model.sh` to also check the model catalogue against it; otherwise
 that check uses `~/.pi/ds4/support` when it exists.

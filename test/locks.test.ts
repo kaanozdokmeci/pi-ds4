@@ -78,6 +78,27 @@ describe("tryAcquireLock", () => {
 		if (next.acquired) await next.release();
 	});
 
+	it("reports only the well-typed fields of an owner file", async () => {
+		const dir = join(root, "downloads", "dsv4-flash-q4");
+		await mkdir(dir, { recursive: true });
+		const file = { pid: "10", processStart: START, label: "dsv4-flash-q4", createdAt: "yesterday" };
+		await writeFile(join(dir, "owner.json"), JSON.stringify(file), "utf8");
+		const next = await tryAcquireLock(dir, owner(11, "dsv4-flash-q4"), probe({ 11: START }));
+		assert.equal(next.acquired, false);
+		assert.deepEqual(next.acquired ? undefined : next.owner, { processStart: START, label: "dsv4-flash-q4" });
+		await rm(dir, { recursive: true, force: true });
+	});
+
+	it("treats an owner file that holds an array as missing", async () => {
+		const dir = join(root, "downloads", "dsv4-flash-q2q4");
+		await mkdir(dir, { recursive: true });
+		await writeFile(join(dir, "owner.json"), "[10]", "utf8");
+		const next = await tryAcquireLock(dir, owner(11, "dsv4-flash-q2q4"), probe({ 11: START }));
+		assert.equal(next.acquired, false);
+		assert.equal(next.acquired ? "acquired" : next.owner, undefined);
+		await rm(dir, { recursive: true, force: true });
+	});
+
 	it("takes over an old lock directory without an owner file", async () => {
 		const dir = join(root, "downloads", "ds41f-q2");
 		await mkdir(dir, { recursive: true });

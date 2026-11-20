@@ -71,10 +71,12 @@ describe("catalogue", () => {
 	});
 
 	it("only offers the DeepSeek V4.1 vision encoder on Metal", () => {
-		const v41 = ADDONS_BY_KEY.get("dsv41-flash-vision")!;
+		const v41 = ADDONS_BY_KEY.get("dsv41-flash-vision");
+		const glm = ADDONS_BY_KEY.get("glm53-flash-vision");
+		assert.ok(v41 && glm);
 		assert.equal(addonAvailableOnPlatform(v41, "darwin"), true);
 		assert.equal(addonAvailableOnPlatform(v41, "linux"), false);
-		assert.equal(addonAvailableOnPlatform(ADDONS_BY_KEY.get("glm53-flash-vision")!, "linux"), true);
+		assert.equal(addonAvailableOnPlatform(glm, "linux"), true);
 	});
 });
 
@@ -229,23 +231,23 @@ describe("download_model.sh parsing", () => {
 // DS4_DOWNLOAD_SCRIPT at its download_model.sh, or install pi-ds4 so the
 // managed checkout exists under ~/.pi/ds4/support.
 const upstreamScriptPath =
-	process.env.DS4_DOWNLOAD_SCRIPT ?? join(homedir(), ".pi", "ds4", "support", "download_model.sh");
+	process.env["DS4_DOWNLOAD_SCRIPT"] ?? join(homedir(), ".pi", "ds4", "support", "download_model.sh");
 const upstreamScript = existsSync(upstreamScriptPath) ? readFileSync(upstreamScriptPath, "utf8") : undefined;
 
 describe("upstream download_model.sh", { skip: upstreamScript ? false : `no script at ${upstreamScriptPath}` }, () => {
+	const script = upstreamScript ?? "";
 	it("provides every model target and file name", () => {
 		for (const model of DOWNLOADABLE_MODELS) {
-			assert.equal(downloadScriptMentionsTarget(upstreamScript!, model.target), true, model.target);
-			assert.notDeepEqual(expectedModelFiles(upstreamScript!, model), [], model.key);
+			assert.equal(downloadScriptMentionsTarget(script, model.target), true, model.target);
+			assert.notDeepEqual(expectedModelFiles(script, model), [], model.key);
 		}
 	});
 
 	it("has an exact size for every single-file download", () => {
-		const declared = artifactSizes(upstreamScript!);
+		const declared = artifactSizes(script);
 		for (const item of [...DOWNLOADABLE_MODELS, ...ADDONS]) {
 			if ("shardCount" in item && item.shardCount) continue;
-			const files =
-				"fileVariable" in item && item.fileVariable ? [shellVariable(upstreamScript!, item.fileVariable)!] : [];
+			const files = "fileVariable" in item && item.fileVariable ? [shellVariable(script, item.fileVariable) ?? ""] : [];
 			const known = files.every((file) => declared.has(file));
 			assert.ok(known || (item.downloadBytes ?? 0) > 0, item.key);
 		}
@@ -253,8 +255,8 @@ describe("upstream download_model.sh", { skip: upstreamScript ? false : `no scri
 
 	it("provides every add-on target and file name", () => {
 		for (const addon of ADDONS) {
-			assert.equal(downloadScriptMentionsTarget(upstreamScript!, addon.target), true, addon.target);
-			assert.ok(shellVariable(upstreamScript!, addon.fileVariable), addon.key);
+			assert.equal(downloadScriptMentionsTarget(script, addon.target), true, addon.target);
+			assert.ok(shellVariable(script, addon.fileVariable), addon.key);
 		}
 	});
 });

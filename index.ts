@@ -51,6 +51,7 @@ import {
 	type SpeculativeSupport,
 	type SsdStreamingMode,
 } from "./catalog.ts";
+import { errorCode, isJsonObject } from "./guards.ts";
 import { tryAcquireLock, type OwnerProbe } from "./locks.ts";
 import { type DownloadProgress, downloadRowText, downloadsSummaryText, formatBytes } from "./progress.ts";
 
@@ -83,12 +84,12 @@ function settingsKeyForEnv(envName: string): string {
 
 function readSettingsSync(): Ds4Settings {
 	try {
-		const parsed = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Ds4Settings;
+		const parsed: unknown = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
+		if (isJsonObject(parsed)) return parsed;
 		throw new Error("settings root must be a JSON object");
-	} catch (error: any) {
-		if (error?.code === "ENOENT") return {};
-		throw new Error(`Failed to read ${SETTINGS_FILE}: ${describeError(error)}`);
+	} catch (error) {
+		if (errorCode(error) === "ENOENT") return {};
+		throw new Error(`Failed to read ${SETTINGS_FILE}: ${describeError(error)}`, { cause: error });
 	}
 }
 
@@ -110,6 +111,10 @@ function configString(envName: string, defaultValue?: string): string | undefine
 	if (typeof value === "string") return value;
 	if (typeof value === "number" || typeof value === "boolean") return String(value);
 	throw new Error(`${envName} must be a string in the environment or ${SETTINGS_FILE}`);
+}
+
+function configStringOr(envName: string, defaultValue: string): string {
+	return configString(envName) ?? defaultValue;
 }
 
 function configNumber(envName: string, defaultValue: number): number {
@@ -139,7 +144,7 @@ function configIsSet(envName: string): boolean {
 }
 
 function selectedProtocol(): ProviderProtocol {
-	const raw = configString("DS4_PROTOCOL", "openai-responses")?.toLowerCase();
+	const raw = configStringOr("DS4_PROTOCOL", "openai-responses").toLowerCase();
 	switch (raw) {
 		case "openai":
 		case "openai-completions":
@@ -159,7 +164,7 @@ function selectedProtocol(): ProviderProtocol {
 }
 
 function selectedSsdStreaming(): SsdStreamingMode {
-	const raw = configString("DS4_SSD_STREAMING", "auto")!.toLowerCase();
+	const raw = configStringOr("DS4_SSD_STREAMING", "auto").toLowerCase();
 	switch (raw) {
 		case "auto":
 			return "auto";
@@ -178,8 +183,8 @@ function selectedSsdStreaming(): SsdStreamingMode {
 	}
 }
 
-const SUPPORT_REPO = configString("DS4_SUPPORT_REPO", "https://github.com/antirez/ds4")!;
-const SUPPORT_BRANCH = configString("DS4_SUPPORT_BRANCH", "main")!;
+const SUPPORT_REPO = configStringOr("DS4_SUPPORT_REPO", "https://github.com/antirez/ds4");
+const SUPPORT_BRANCH = configStringOr("DS4_SUPPORT_BRANCH", "main");
 
 const SERVER_HOST = "127.0.0.1";
 const PROVIDER_API = selectedProtocol();
@@ -232,7 +237,7 @@ type ServerState = {
 	args: string[];
 	startedAt: number;
 	startedAtIso: string;
-	processStart?: string;
+	processStart?: string | undefined;
 	host?: string;
 	origin?: string;
 	apiBaseUrl?: string;
@@ -256,7 +261,7 @@ type PortState = {
 	reservedByPid?: number;
 	reservedByProcessStart?: string;
 	serverPid?: number;
-	serverProcessStart?: string;
+	serverProcessStart?: string | undefined;
 	cwd?: string;
 	updatedAt: number;
 	updatedAtIso: string;
@@ -277,7 +282,7 @@ type StatusCallback = (message: string | undefined) => void;
 // Applies an update to one download's entry in activeDownloads.
 type DownloadReporter = (update: Partial<DownloadProgress>) => void;
 type RunLoggedOptions = {
-	onStatus?: StatusCallback;
+	onStatus?: StatusCallback | undefined;
 	progressPrefix?: string;
 	// Takes over status reporting for the child's output lines. Downloads use it
 	// to feed their byte-counting progress bar instead of writing raw lines.
@@ -286,7 +291,11 @@ type RunLoggedOptions = {
 
 type LogTui = { terminal: { rows: number }; requestRender: (force?: boolean) => void };
 type LogTheme = { fg: (color: "accent" | "border" | "dim", text: string) => string };
-type Component = { render(width: number): string[]; handleInput?(data: string): void; invalidate(): void };
+type Component = {
+	render: (width: number) => string[];
+	handleInput?: (data: string) => void;
+	invalidate: () => void;
+};
 
 const WATCHDOG_SCRIPT_NAME = "ds4-watchdog.sh";
 const WATCHDOG_SCRIPT_CONFIG = configString("DS4_WATCHDOG_SCRIPT");
@@ -312,7 +321,6 @@ let installedAddonKeys = new Set<string>();
 let currentEndpoint: ServerEndpoint | undefined;
 let leaseStartedAt = Date.now();
 let ownProcessStart: string | undefined;
-let leaseActive = false;
 let watchdogStarted = false;
 let runtimeDisposed = false;
 let shuttingDown = false;
@@ -334,8 +342,8 @@ function isPidAlive(pid: unknown): pid is number {
 	try {
 		process.kill(pid, 0);
 		return true;
-	} catch (error: any) {
-		return error?.code === "EPERM";
+	} catch (error) {
+		return errorCode(error) === "EPERM";
 	}
 }
 
@@ -348,7 +356,7 @@ function hostForUrl(host: string): string {
 }
 
 function endpointForPort(port: number, host = SERVER_HOST): ServerEndpoint {
-	if (!isValidPort(port)) throw new Error(`Invalid ds4-server port: ${port}`);
+	if (!isValidPort(port)) throw new Error(`Invalid ds4-server port: ${String(port)}`);
 	const origin = `http://${hostForUrl(host)}:${port}`;
 	return { host, port, origin, apiBaseUrl: `${origin}/v1` };
 }
@@ -361,6 +369,7 @@ function endpointFromUrl(value: string | undefined): ServerEndpoint | undefined 
 		const port = Number(url.port || (url.protocol === "http:" ? 80 : 443));
 		if (!isValidPort(port)) return undefined;
 		return endpointForPort(port, url.hostname || SERVER_HOST);
+		// oxlint-disable-next-line preserve-caught-error -- An unparsable URL means there is no endpoint.
 	} catch {
 		return undefined;
 	}
@@ -417,6 +426,7 @@ function isKey(data: string, key: "escape" | "up" | "down" | "home" | "end" | "p
 	}
 }
 
+// oxlint-disable-next-line eslint/no-control-regex -- The pattern strips terminal escape sequences from log output.
 const ANSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|_[^\x07]*(?:\x07|\x1b\\))/g;
 
 function stripAnsi(value: string): string {
@@ -449,7 +459,7 @@ function contextTokensForModel(modelKey: ModelKey): number {
 }
 
 function modelDownloadDir(runtimeDir: string): string {
-	return resolve(runtimeDir, process.env.DS4_GGUF_DIR || "gguf");
+	return resolve(runtimeDir, process.env["DS4_GGUF_DIR"] || "gguf");
 }
 
 async function discoverRuntimeDirForModels(): Promise<string | undefined> {
@@ -459,6 +469,7 @@ async function discoverRuntimeDirForModels(): Promise<string | undefined> {
 		return (await isDs4Checkout(runtimeDir)) ? runtimeDir : undefined;
 	}
 	if (!(await isDs4Checkout(SUPPORT_DIR))) return undefined;
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- An unresolvable support path falls back to the unresolved path.
 	return realpath(SUPPORT_DIR).catch(() => SUPPORT_DIR);
 }
 
@@ -466,6 +477,7 @@ async function filesPresent(downloadDir: string, files: string[]): Promise<boole
 	if (files.length === 0) return false;
 	const present = await Promise.all(
 		files.map(async (fileName) => {
+			// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A file that cannot be read counts as not downloaded.
 			const info = await stat(join(downloadDir, fileName)).catch(() => undefined);
 			return !!info?.isFile() && info.size > 0;
 		}),
@@ -480,6 +492,7 @@ async function discoverInstalled(runtimeDir?: string): Promise<InstalledArtifact
 	runtimeDir ??= await discoverRuntimeDirForModels();
 	if (!runtimeDir) return installed;
 
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Without a readable download script no model counts as installed.
 	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8").catch(() => undefined);
 	if (!script) return installed;
 	const downloadDir = modelDownloadDir(runtimeDir);
@@ -514,6 +527,7 @@ function visionEnabledForModel(modelKey: ModelKey): boolean {
 }
 
 async function addonPath(runtimeDir: string, addon: Addon): Promise<string | undefined> {
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Without a readable download script the add-on has no path.
 	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8").catch(() => undefined);
 	const fileName = script ? shellVariable(script, addon.fileVariable) : undefined;
 	if (!fileName) return undefined;
@@ -650,7 +664,9 @@ async function ensureDirs(): Promise<void> {
 
 async function readJson<T>(file: string): Promise<T | undefined> {
 	try {
+		// oxlint-disable-next-line typescript/consistent-type-assertions -- State files are written only by this extension, and readers check the fields they use.
 		return JSON.parse(await readFile(file, "utf8")) as T;
+		// oxlint-disable-next-line preserve-caught-error -- A missing or malformed JSON file reads as absent.
 	} catch {
 		return undefined;
 	}
@@ -666,8 +682,8 @@ async function writeJsonAtomic(file: string, data: unknown): Promise<void> {
 async function removeFile(file: string): Promise<void> {
 	try {
 		await unlink(file);
-	} catch (error: any) {
-		if (error?.code !== "ENOENT") throw error;
+	} catch (error) {
+		if (errorCode(error) !== "ENOENT") throw error;
 	}
 }
 
@@ -700,8 +716,8 @@ async function readLogTail(): Promise<string[]> {
 		const lines = text.split("\n");
 		if (lines.at(-1) === "") lines.pop();
 		return lines.slice(-LOG_MAX_LINES);
-	} catch (error: any) {
-		if (error?.code === "ENOENT") return [`No ds4 log yet: ${LOG_FILE}`];
+	} catch (error) {
+		if (errorCode(error) === "ENOENT") return [`No ds4 log yet: ${LOG_FILE}`];
 		return [`Failed to read ${LOG_FILE}: ${describeError(error)}`];
 	}
 }
@@ -742,11 +758,15 @@ class Ds4LogViewer implements Component {
 	private cachedScroll = -1;
 	private cachedLines: string[] = [];
 
-	constructor(
-		private tui: LogTui,
-		private theme: LogTheme,
-		private done: () => void,
-	) {
+	private tui: LogTui;
+	private theme: LogTheme;
+	private done: () => void;
+
+	constructor(tui: LogTui, theme: LogTheme, done: () => void) {
+		this.tui = tui;
+		this.theme = theme;
+		this.done = done;
+		// oxlint-disable-next-line typescript/no-floating-promises -- refresh never rejects: readLogTail reports read failures as log lines.
 		void this.refresh();
 		this.timer = setInterval(() => void this.refresh(), LOG_POLL_MS);
 		this.timer.unref?.();
@@ -847,11 +867,14 @@ class Ds4LogViewer implements Component {
 class DownloadProgressViewer implements Component {
 	private timer: ReturnType<typeof setInterval> | undefined;
 
-	constructor(
-		private tui: LogTui,
-		private theme: LogTheme,
-		private done: () => void,
-	) {
+	private tui: LogTui;
+	private theme: LogTheme;
+	private done: () => void;
+
+	constructor(tui: LogTui, theme: LogTheme, done: () => void) {
+		this.tui = tui;
+		this.theme = theme;
+		this.done = done;
 		this.timer = setInterval(() => this.tui.requestRender(), PROGRESS_POLL_MS);
 		this.timer.unref?.();
 	}
@@ -909,13 +932,14 @@ async function execCapture(command: string, args: string[], timeoutMs = 2_000): 
 		const timeout = setTimeout(() => {
 			try {
 				child?.kill("SIGTERM");
-			} catch {}
+			} catch {} // oxlint-disable-line preserve-caught-error -- The child may already have exited, and the timeout still settles.
 			finish(undefined);
 		}, timeoutMs);
 		timeout.unref?.();
 
 		try {
 			child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+			// oxlint-disable-next-line preserve-caught-error -- A command that cannot be spawned yields no output.
 		} catch {
 			finish(undefined);
 			return;
@@ -1046,9 +1070,10 @@ async function resolveEndpointLocked(): Promise<ServerEndpoint> {
 
 	const state = await readState();
 	const stateEndpoint = endpointFromState(state);
-	if (stateEndpoint && (await isServerStateForLiveDs4(state))) {
+	if (state && stateEndpoint && (await isServerStateForLiveDs4(state))) {
 		currentEndpoint = stateEndpoint;
-		await writePortStateForServer(stateEndpoint, state!.pid, state!.processStart).catch(() => {});
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Recording the port is best effort; the endpoint is already known.
+		await writePortStateForServer(stateEndpoint, state.pid, state.processStart).catch(() => {});
 		return currentEndpoint;
 	}
 	if (state?.pid) await clearState();
@@ -1059,6 +1084,7 @@ async function resolveEndpointLocked(): Promise<ServerEndpoint> {
 		currentEndpoint = portStateEndpoint;
 		return currentEndpoint;
 	}
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Removing a stale port file is best effort; a new endpoint is reserved next.
 	if (portState) await removeFile(PORT_FILE).catch(() => {});
 
 	currentEndpoint = endpointForPort(await allocateRandomPort());
@@ -1105,16 +1131,18 @@ async function resolveWatchdogScript(): Promise<string> {
 	try {
 		await access(WATCHDOG_SCRIPT, constants.F_OK);
 		return WATCHDOG_SCRIPT;
-	} catch {
-		throw new Error(`Cannot find bundled ${WATCHDOG_SCRIPT_NAME} at ${WATCHDOG_SCRIPT}`);
+	} catch (error) {
+		throw new Error(`Cannot find bundled ${WATCHDOG_SCRIPT_NAME} at ${WATCHDOG_SCRIPT}`, { cause: error });
 	}
 }
 
 async function cleanupLegacyWatchdogStateFiles(): Promise<void> {
-	const entries = await readdir(DS4_DIR).catch(() => [] as string[]);
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A missing ds4 directory has no legacy watchdog files.
+	const entries = await readdir(DS4_DIR).catch((): string[] => []);
 	await Promise.all(
 		entries
 			.filter((entry) => /^watchdog(?:-\d+)?\.json$/.test(entry))
+			// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Removing legacy watchdog files is best effort.
 			.map((entry) => removeFile(join(DS4_DIR, entry)).catch(() => {})),
 	);
 }
@@ -1130,7 +1158,7 @@ async function cleanupOldNodeWatchdogs(): Promise<void> {
 		try {
 			process.kill(pid, "SIGTERM");
 			await appendLog(`[${new Date().toISOString()}] stopped old node ds4-watchdog pid=${pid}\n`);
-		} catch {}
+		} catch {} // oxlint-disable-line preserve-caught-error -- The old watchdog may already have exited.
 	}
 	await cleanupLegacyWatchdogStateFiles();
 }
@@ -1208,11 +1236,13 @@ function huggingFaceIncompletePrefix(fileName: string): string {
 
 async function measureDownloadBytes(downloadDir: string, fileNames: string[]): Promise<number> {
 	let total = 0;
-	const entries = await readdir(downloadDir).catch(() => [] as string[]);
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A missing download directory holds no partial downloads.
+	const entries = await readdir(downloadDir).catch((): string[] => []);
 	for (const entry of entries) {
 		// Matches the finished file as well as curl's ".part" and the split
 		// ".part1"/".part2" artifacts of the larger downloads.
 		if (!fileNames.some((name) => entry === name || entry.startsWith(`${name}.`))) continue;
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A file removed between listing and stat counts as zero bytes.
 		const info = await stat(join(downloadDir, entry)).catch(() => undefined);
 		if (info?.isFile()) total += info.size;
 	}
@@ -1225,9 +1255,11 @@ async function measureDownloadBytes(downloadDir: string, fileNames: string[]): P
 		const relativeDir = dirname(fileName);
 		const hfDir = join(downloadDir, ".cache", "huggingface", "download", relativeDir === "." ? "" : relativeDir);
 		const prefix = `${huggingFaceIncompletePrefix(fileName)}.`;
-		const hfEntries = await readdir(hfDir).catch(() => [] as string[]);
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A missing Hugging Face cache directory holds no partial downloads.
+		const hfEntries = await readdir(hfDir).catch((): string[] => []);
 		for (const entry of hfEntries) {
 			if (!entry.startsWith(prefix) || !entry.endsWith(".incomplete")) continue;
+			// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A file removed between listing and stat counts as zero bytes.
 			const info = await stat(join(hfDir, entry)).catch(() => undefined);
 			if (info?.isFile()) total += info.size;
 		}
@@ -1235,7 +1267,7 @@ async function measureDownloadBytes(downloadDir: string, fileNames: string[]): P
 	return total;
 }
 
-type DownloadMonitor = { setLine(text: string): void; stop(): void };
+type DownloadMonitor = { setLine: (text: string) => void; stop: () => void };
 
 function startDownloadMonitor(
 	downloadDir: string,
@@ -1267,6 +1299,7 @@ function startDownloadMonitor(
 	};
 
 	const poll = async () => {
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A failed size probe reports no bytes for this poll.
 		const bytes = await measureDownloadBytes(downloadDir, fileNames).catch(() => 0);
 		if (stopped) return;
 		const now = Date.now();
@@ -1278,6 +1311,7 @@ function startDownloadMonitor(
 		emit();
 	};
 
+	// oxlint-disable-next-line typescript/no-floating-promises -- poll catches its own size-probe failures and never rejects.
 	void poll();
 	const timer = setInterval(() => void poll(), PROGRESS_POLL_MS);
 	timer.unref?.();
@@ -1297,10 +1331,9 @@ function startDownloadMonitor(
 function formatCurlProgress(line: string): string | undefined {
 	const fields = line.trim().split(/\s+/);
 	if (fields.length < 12) return undefined;
-	if (!/^\d+(?:\.\d+)?$/.test(fields[0]) || !/^\d+(?:\.\d+)?$/.test(fields[2])) return undefined;
+	const [percentTotal = "", total, percent = ""] = fields;
+	if (!/^\d+(?:\.\d+)?$/.test(percentTotal) || !/^\d+(?:\.\d+)?$/.test(percent)) return undefined;
 
-	const total = fields[1];
-	const percent = fields[2];
 	const received = fields[3];
 	const left = fields[10];
 	const speed = fields[11];
@@ -1314,6 +1347,7 @@ function formatCurlProgress(line: string): string | undefined {
 
 function compactProgressLine(rawLine: string): string | undefined {
 	let line = stripAnsi(rawLine)
+		// oxlint-disable-next-line eslint/no-control-regex -- The pattern strips control characters from downloader output.
 		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
 		.replace(/\s+/g, " ")
 		.trim();
@@ -1407,7 +1441,7 @@ async function runLogged(
 		try {
 			if (typeof chunk === "string") writeSync(logFd, chunk);
 			else writeSync(logFd, chunk);
-		} catch {}
+		} catch {} // oxlint-disable-line preserve-caught-error -- Log writes are best effort and must not interrupt the child's output handling.
 	};
 	const closeLog = () => {
 		if (!closed) {
@@ -1468,7 +1502,7 @@ function killActiveSetupChildren(): void {
 		if (!child.pid) continue;
 		try {
 			process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM");
-		} catch {}
+		} catch {} // oxlint-disable-line preserve-caught-error -- The process group may already have exited.
 	}
 }
 
@@ -1480,6 +1514,7 @@ async function isDs4Checkout(dir: string): Promise<boolean> {
 			access(join(dir, "ds4_server.c"), constants.F_OK),
 		]);
 		return true;
+		// oxlint-disable-next-line preserve-caught-error -- A missing file means the directory is not a ds4 checkout.
 	} catch {
 		return false;
 	}
@@ -1491,7 +1526,9 @@ async function updateManagedSupportCheckout(runtimeDir: string, onStatus?: Statu
 
 	// A symlink is installed for local development and belongs to its developer;
 	// only update the checkout cloned and managed under ~/.pi/ds4/support.
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A missing support path is not a symbolic link.
 	if ((await lstat(SUPPORT_DIR).catch(() => undefined))?.isSymbolicLink()) return;
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Without a .git directory there is no managed checkout to update.
 	if (!(await stat(join(runtimeDir, ".git")).catch(() => undefined))?.isDirectory()) return;
 
 	const before = (await execCapture("git", ["-C", runtimeDir, "rev-parse", "HEAD"], 5_000))?.trim();
@@ -1516,6 +1553,7 @@ async function ensureSupportCheckout(onStatus?: StatusCallback): Promise<string>
 		let runtimeDir: string;
 		try {
 			runtimeDir = await realpath(SUPPORT_DIR);
+			// oxlint-disable-next-line preserve-caught-error -- An unresolvable support path falls back to the unresolved path.
 		} catch {
 			runtimeDir = SUPPORT_DIR;
 		}
@@ -1526,8 +1564,8 @@ async function ensureSupportCheckout(onStatus?: StatusCallback): Promise<string>
 	try {
 		await stat(SUPPORT_DIR);
 		throw new Error(`${SUPPORT_DIR} exists but does not look like a ds4 checkout`);
-	} catch (error: any) {
-		if (error?.code !== "ENOENT") throw error;
+	} catch (error) {
+		if (errorCode(error) !== "ENOENT") throw error;
 	}
 
 	onStatus?.("cloning ds4 support checkout");
@@ -1637,16 +1675,22 @@ async function installedModelPath(runtimeDir: string, modelKey: ModelKey): Promi
 	const model = modelForKey(modelKey);
 	const script = await readFile(join(runtimeDir, "download_model.sh"), "utf8");
 	const files = expectedModelFiles(script, model);
-	if (files.length === 0) throw new Error(`Cannot resolve files for ${model.target}`);
+	const [firstFile] = files;
+	if (firstFile === undefined) throw new Error(`Cannot resolve files for ${model.target}`);
 	const installed = await discoverInstalledModelKeys(runtimeDir);
 	if (!installed.has(modelKey)) throw new Error(`${model.name} is not downloaded; use /ds4 first`);
-	return join(modelDownloadDir(runtimeDir), files[0]);
+	return join(modelDownloadDir(runtimeDir), firstFile);
 }
 
 async function ensureRuntimeReadyLocked(
 	modelKey: ModelKey,
 	onStatus?: StatusCallback,
-): Promise<{ runtimeDir: string; modelPath: string; visionPath?: string; dsparkPath?: string }> {
+): Promise<{
+	runtimeDir: string;
+	modelPath: string;
+	visionPath?: string | undefined;
+	dsparkPath?: string | undefined;
+}> {
 	const runtimeDir = await resolveRuntimeDirLocked(onStatus);
 	if (runtimeDisposed || shuttingDown) return { runtimeDir, modelPath: "" };
 	await ensureBuilt(runtimeDir, onStatus);
@@ -1670,6 +1714,7 @@ async function isLockDirStale(lockDir: string): Promise<boolean> {
 	try {
 		const info = await stat(lockDir);
 		return Date.now() - info.mtimeMs > LOCK_STALE_MS;
+		// oxlint-disable-next-line preserve-caught-error -- A lock directory that cannot be read is treated as stale.
 	} catch {
 		return true;
 	}
@@ -1696,14 +1741,14 @@ async function withDirLock<T>(
 				createdAt: Date.now(),
 			});
 			break;
-		} catch (error: any) {
-			if (error?.code !== "EEXIST") throw error;
+		} catch (error) {
+			if (errorCode(error) !== "EEXIST") throw error;
 			if (await isLockDirStale(lockDir)) {
 				await rm(lockDir, { recursive: true, force: true });
 				continue;
 			}
 			if (timeoutMs > 0 && Date.now() - started > timeoutMs) {
-				throw new Error(`Timed out waiting for ds4 ${name} lock at ${lockDir}`);
+				throw new Error(`Timed out waiting for ds4 ${name} lock at ${lockDir}`, { cause: error });
 			}
 			await sleep(100 + Math.floor(Math.random() * 150));
 		}
@@ -1742,6 +1787,7 @@ async function touchLease(): Promise<void> {
 function startHeartbeat(): void {
 	if (heartbeat) clearInterval(heartbeat);
 	heartbeat = setInterval(() => {
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Heartbeat writes are best effort; the next interval retries.
 		void touchLease().catch(() => {});
 	}, HEARTBEAT_MS);
 	heartbeat.unref?.();
@@ -1756,12 +1802,14 @@ function stopHeartbeat(): void {
 
 async function pruneLeases(): Promise<void> {
 	await mkdir(CLIENT_DIR, { recursive: true });
-	const entries = await readdir(CLIENT_DIR).catch(() => [] as string[]);
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A missing clients directory holds no leases.
+	const entries = await readdir(CLIENT_DIR).catch((): string[] => []);
 	const now = Date.now();
 
 	for (const entry of entries) {
 		if (!entry.endsWith(".json")) continue;
 		const file = join(CLIENT_DIR, entry);
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A lease file removed during pruning counts as stale.
 		const [lease, info] = await Promise.all([readJson<Lease>(file), stat(file).catch(() => undefined)]);
 		const staleByAge = !info || now - info.mtimeMs > LEASE_TTL_MS;
 		const staleByProcess = !(await isLeaseForLiveProcess(lease));
@@ -1772,7 +1820,6 @@ async function pruneLeases(): Promise<void> {
 async function activateLease(): Promise<void> {
 	await ensureDirs();
 	await touchLease();
-	leaseActive = true;
 	await pruneLeases();
 	await ensureWatchdog();
 	startHeartbeat();
@@ -1780,7 +1827,6 @@ async function activateLease(): Promise<void> {
 
 async function removeOwnLease(): Promise<void> {
 	await removeFile(LEASE_FILE);
-	leaseActive = false;
 }
 
 async function readState(): Promise<ServerState | undefined> {
@@ -1797,6 +1843,7 @@ async function checkHttpReady(): Promise<boolean> {
 	try {
 		const response = await fetch(`${apiBaseUrl()}/models`, { signal: controller.signal });
 		return response.ok;
+		// oxlint-disable-next-line preserve-caught-error -- Any fetch failure means the server is not ready yet.
 	} catch {
 		return false;
 	} finally {
@@ -1856,21 +1903,21 @@ async function stopServerPidLocked(pid: number, reason: string): Promise<void> {
 	await appendLog(`\n[${new Date().toISOString()}] ${reason}; stopping ds4-server pid=${pid}\n`);
 	try {
 		process.kill(pid, "SIGTERM");
-	} catch (error: any) {
-		if (error?.code !== "ESRCH") throw error;
+	} catch (error) {
+		if (errorCode(error) !== "ESRCH") throw error;
 	}
 
 	if (!(await waitForPidExit(pid, SHUTDOWN_GRACE_MS))) {
 		await appendLog(`[${new Date().toISOString()}] ds4-server pid=${pid} still alive; sending SIGKILL\n`);
 		try {
 			process.kill(pid, "SIGKILL");
-		} catch {}
+		} catch {} // oxlint-disable-line preserve-caught-error -- The process may already have exited.
 		await waitForPidExit(pid, 5_000);
 	}
 
 	if (isPidAlive(pid)) throw new Error(`ds4-server pid ${pid} did not exit`);
 	await clearState();
-	await appendLog(`[${new Date().toISOString()}] ds4-server pid=${pid} stopped\n`);
+	await appendLog(`[${new Date().toISOString()}] ds4-server pid=${String(pid)} stopped\n`);
 }
 
 async function waitForServerReady(modelKey: ModelKey, onStatus?: StatusCallback): Promise<void> {
@@ -1907,8 +1954,8 @@ async function startServerLocked(
 	const binary = configString("DS4_SERVER_BINARY") ?? join(runtimeDir, "ds4-server");
 	try {
 		await access(binary, constants.X_OK);
-	} catch {
-		throw new Error(`Cannot execute ds4-server at ${binary}`);
+	} catch (error) {
+		throw new Error(`Cannot execute ds4-server at ${binary}`, { cause: error });
 	}
 
 	const endpoint = currentServerEndpoint();
@@ -1966,6 +2013,7 @@ async function startServerLocked(
 		startedAtIso: new Date(now).toISOString(),
 	};
 	await writeJsonAtomic(STATE_FILE, state);
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Recording the port is best effort; the server is already running.
 	await writePortStateForServer(endpoint, childPid, serverProcessStart).catch(() => {});
 }
 
@@ -1983,36 +2031,36 @@ async function ensureServerManagedInner(modelKey: ModelKey, onStatus?: StatusCal
 			await pruneLeases();
 
 			const state = await readState();
-			if (await isServerStateForLiveDs4(state)) {
-				if (state!.stopping) {
-					stoppingPid = state!.pid;
+			if (state && (await isServerStateForLiveDs4(state))) {
+				if (state.stopping) {
+					stoppingPid = state.pid;
 					return;
 				}
 				if (runtimeCheckoutUpdated) {
 					onStatus?.("restarting ds4-server after runtime update");
-					await stopServerPidLocked(state!.pid, "apply updated ds4 runtime/model manifest");
+					await stopServerPidLocked(state.pid, "apply updated ds4 runtime/model manifest");
 				} else if (!serverStateMatchesEndpoint(state)) {
 					onStatus?.("moving ds4-server to reserved port");
-					await stopServerPidLocked(state!.pid, "move ds4-server to reserved port");
+					await stopServerPidLocked(state.pid, "move ds4-server to reserved port");
 				} else if (!serverStateMatchesModel(state, modelKey)) {
 					onStatus?.(`switching ds4-server to ${modelKey}`);
-					await stopServerPidLocked(state!.pid, `switch ds4-server to ${modelKey}`);
+					await stopServerPidLocked(state.pid, `switch ds4-server to ${modelKey}`);
 				} else if (!serverStateMatchesPower(state, modelKey)) {
 					const power = powerPercentForModel(modelKey);
 					onStatus?.(`restarting ds4-server at ${power}% power`);
-					await stopServerPidLocked(state!.pid, `apply configured ${power}% power`);
+					await stopServerPidLocked(state.pid, `apply configured ${power}% power`);
 				} else if (!serverStateMatchesSsdStreaming(state, modelKey)) {
 					const streaming = ssdStreamingForModel(modelKey);
 					onStatus?.(`restarting ds4-server with SSD streaming ${streaming ? "on" : "off"}`);
-					await stopServerPidLocked(state!.pid, `apply SSD streaming ${streaming ? "on" : "off"}`);
+					await stopServerPidLocked(state.pid, `apply SSD streaming ${streaming ? "on" : "off"}`);
 				} else if (!serverStateMatchesVision(state, modelKey)) {
 					const vision = visionEnabledForModel(modelKey);
 					onStatus?.(`restarting ds4-server with vision ${vision ? "on" : "off"}`);
-					await stopServerPidLocked(state!.pid, `apply vision ${vision ? "on" : "off"}`);
+					await stopServerPidLocked(state.pid, `apply vision ${vision ? "on" : "off"}`);
 				} else if (!serverStateMatchesSpeculative(state, modelKey)) {
 					const mode = speculativeModeForModel(modelKey)?.kind ?? "off";
 					onStatus?.(`restarting ds4-server with speculative decoding ${mode}`);
-					await stopServerPidLocked(state!.pid, `apply speculative decoding ${mode}`);
+					await stopServerPidLocked(state.pid, `apply speculative decoding ${mode}`);
 				} else {
 					return;
 				}
@@ -2058,6 +2106,7 @@ async function ensureServerManagedInner(modelKey: ModelKey, onStatus?: StatusCal
 function ensureServerManaged(modelKey: ModelKey, onStatus?: StatusCallback): Promise<void> {
 	if (startupPromise) {
 		if (startupModelKey === modelKey) return startupPromise;
+		// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A failed earlier startup is retried by ensureServerManaged.
 		return startupPromise.catch(() => {}).then(() => ensureServerManaged(modelKey, onStatus));
 	}
 
@@ -2086,8 +2135,8 @@ async function isServerRunning(): Promise<boolean> {
 async function stopServerManually(): Promise<boolean> {
 	return withLock(async () => {
 		const state = await readState();
-		if (await isServerStateForLiveDs4(state)) {
-			await stopServerPidLocked(state!.pid, "manual stop from /ds4");
+		if (state && (await isServerStateForLiveDs4(state))) {
+			await stopServerPidLocked(state.pid, "manual stop from /ds4");
 			return true;
 		}
 		if (state?.pid) await clearState();
@@ -2103,7 +2152,7 @@ type DownloadJob = {
 	target: string;
 	name: string;
 	kind: DownloadProgress["kind"];
-	run(runtimeDir: string, report: DownloadReporter): Promise<string>;
+	run: (runtimeDir: string, report: DownloadReporter) => Promise<string>;
 };
 
 const LOCK_OWNER_PROBE: OwnerProbe = { isAlive: isPidAlive, processStart };
@@ -2171,7 +2220,7 @@ function startBackgroundDownload(pi: ExtensionAPI, ctx: ExtensionCommandContext,
 			await refreshDs4Provider(pi);
 			ctx.ui.notify(`Downloaded ${job.name}: ${path}`, "info");
 		})
-		.catch((error) => {
+		.catch((error: unknown) => {
 			if (!runtimeDisposed) ctx.ui.notify(`Could not download ${job.target}: ${describeError(error)}`, "error");
 		})
 		.finally(() => {
@@ -2191,9 +2240,9 @@ async function showDownloadProgress(ctx: ExtensionCommandContext): Promise<void>
 
 	let viewer: DownloadProgressViewer | undefined;
 	try {
-		await ctx.ui.custom<void>(
+		await ctx.ui.custom<undefined>(
 			(tui, theme, _keybindings, done) => {
-				viewer = new DownloadProgressViewer(tui, theme, done);
+				viewer = new DownloadProgressViewer(tui, theme, () => done(undefined));
 				return viewer;
 			},
 			{
@@ -2214,9 +2263,9 @@ async function showDs4Log(ctx: ExtensionCommandContext): Promise<void> {
 
 	let viewer: Ds4LogViewer | undefined;
 	try {
-		await ctx.ui.custom<void>(
+		await ctx.ui.custom<undefined>(
 			(tui, theme, _keybindings, done) => {
-				viewer = new Ds4LogViewer(tui, theme, done);
+				viewer = new Ds4LogViewer(tui, theme, () => done(undefined));
 				return viewer;
 			},
 			{
@@ -2338,7 +2387,7 @@ function registerDs4Command(pi: ExtensionAPI): void {
 	});
 }
 
-function modelCompat(): Model<ProviderProtocol>["compat"] {
+function modelCompat(): NonNullable<Model<ProviderProtocol>["compat"]> {
 	if (PROVIDER_API === "openai-completions") {
 		return {
 			supportsStore: false,
@@ -2393,7 +2442,7 @@ function protocolStreams(): ProviderStreams {
 }
 
 function managedStreams(upstream: ProviderStreams): ProviderStreams {
-	const prepare = (model: Model<any>, run: () => ReturnType<ProviderStreams["stream"]>) =>
+	const prepare = (model: Parameters<ProviderStreams["stream"]>[0], run: () => ReturnType<ProviderStreams["stream"]>) =>
 		lazyStream(model, async () => {
 			const modelKey = modelKeyForModelId(model.id);
 			if (!modelKey || !installedModelKeys.has(modelKey)) {
@@ -2417,7 +2466,7 @@ function managedStreams(upstream: ProviderStreams): ProviderStreams {
 }
 
 function createDs4Provider(): Provider<ProviderProtocol> {
-	const configuredApiKey = configString("DS4_API_KEY", "dsv4-local");
+	const configuredApiKey = configStringOr("DS4_API_KEY", "dsv4-local");
 	const provider = createProvider<ProviderProtocol>({
 		id: PROVIDER_ID,
 		name: "ds4.c local",
@@ -2466,7 +2515,6 @@ export default async function (pi: ExtensionAPI) {
 	runtimeDisposed = false;
 	shuttingDown = false;
 	leaseStartedAt = Date.now();
-	leaseActive = false;
 	watchdogStarted = false;
 	startupPromise = undefined;
 	startupModelKey = undefined;
@@ -2503,8 +2551,9 @@ export default async function (pi: ExtensionAPI) {
 		killActiveSetupChildren();
 
 		try {
+			// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- Shutdown waits for a pending startup but must not fail with it.
 			if (startupPromise) await Promise.race([startupPromise.catch(() => {}), sleep(5_000)]);
-		} catch {}
+		} catch {} // oxlint-disable-line preserve-caught-error -- Shutdown continues even when waiting for the startup fails.
 
 		// Session switches and /reload immediately create another extension instance
 		// in the same pi process. Keep the lease for those hand-offs.

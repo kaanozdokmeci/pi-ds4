@@ -6,6 +6,7 @@
 
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { errorCode, isJsonObject } from "./guards.ts";
 
 export type LockOwner = {
 	pid: number;
@@ -15,8 +16,8 @@ export type LockOwner = {
 };
 
 export type OwnerProbe = {
-	isAlive(pid: number): boolean;
-	processStart(pid: number): Promise<string | undefined>;
+	isAlive: (pid: number) => boolean;
+	processStart: (pid: number) => Promise<string | undefined>;
 };
 
 // The owner file is written right after the lock directory is created. A lock
@@ -24,7 +25,7 @@ export type OwnerProbe = {
 export const OWNERLESS_LOCK_GRACE_MS = 60_000;
 
 export type LockAttempt =
-	| { acquired: true; release(): Promise<void> }
+	| { acquired: true; release: () => Promise<void> }
 	| { acquired: false; owner: Partial<LockOwner> | undefined };
 
 export async function lockOwnerIsGone(
@@ -42,16 +43,27 @@ export async function lockOwnerIsGone(
 	return false;
 }
 
+function ownerFromJson(value: unknown): Partial<LockOwner> | undefined {
+	if (!isJsonObject(value)) return undefined;
+	const owner: Partial<LockOwner> = {};
+	if (typeof value["pid"] === "number") owner.pid = value["pid"];
+	if (typeof value["processStart"] === "string") owner.processStart = value["processStart"];
+	if (typeof value["label"] === "string") owner.label = value["label"];
+	if (typeof value["createdAt"] === "number") owner.createdAt = value["createdAt"];
+	return owner;
+}
+
 async function readOwner(lockDir: string): Promise<Partial<LockOwner> | undefined> {
 	try {
-		const parsed = JSON.parse(await readFile(join(lockDir, "owner.json"), "utf8"));
-		return parsed && typeof parsed === "object" ? (parsed as Partial<LockOwner>) : undefined;
+		return ownerFromJson(JSON.parse(await readFile(join(lockDir, "owner.json"), "utf8")));
+		// oxlint-disable-next-line preserve-caught-error -- A missing or malformed owner file means the owner is unknown.
 	} catch {
 		return undefined;
 	}
 }
 
 async function lockAgeMs(lockDir: string): Promise<number> {
+	// oxlint-disable-next-line 2h2d/require-promise-rejection-parameter -- A lock directory that cannot be read counts as infinitely old.
 	const info = await stat(lockDir).catch(() => undefined);
 	return info ? Date.now() - info.mtimeMs : Number.POSITIVE_INFINITY;
 }
@@ -63,8 +75,8 @@ export async function tryAcquireLock(lockDir: string, owner: LockOwner, probe: O
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
 			await mkdir(lockDir);
-		} catch (error: any) {
-			if (error?.code !== "EEXIST") throw error;
+		} catch (error) {
+			if (errorCode(error) !== "EEXIST") throw error;
 			const current = await readOwner(lockDir);
 			if (await lockOwnerIsGone(current, await lockAgeMs(lockDir), probe)) {
 				await rm(lockDir, { recursive: true, force: true });
