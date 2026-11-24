@@ -46,7 +46,7 @@ jobs:
       - name: Set up Zizmor
         uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
-          version: "2026.10.18"
+          version: "2026.11.8"
           install_args: --locked zizmor
           cache: false
 
